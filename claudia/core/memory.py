@@ -1,0 +1,84 @@
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+class Memory:
+    def __init__(self, memory_file: str = "memory.json"):
+        self.memory_path = Path(memory_file)
+        self.session_history: list[dict] = []
+        self.long_term: dict = {
+            "user_preferences": {},
+            "frequent_commands": {},
+            "notes": [],
+            "last_session": "",
+        }
+        self.load()
+
+    def remember(self, key: str, value) -> None:
+        self.long_term["user_preferences"][key] = value
+        self.save()
+
+    def recall(self, key: str):
+        return self.long_term["user_preferences"].get(key)
+
+    def increment_command(self, command: str) -> None:
+        freq = self.long_term["frequent_commands"]
+        freq[command] = freq.get(command, 0) + 1
+        self.save()
+
+    def add_note(self, note: str) -> None:
+        self.long_term["notes"].append({
+            "text": note,
+            "timestamp": datetime.now().isoformat(),
+        })
+        self.save()
+
+    def add_to_history(self, role: str, content: str) -> None:
+        self.session_history.append({"role": role, "content": content})
+
+    def get_context_window(self, n: int = 10) -> list[dict]:
+        return self.session_history[-n:]
+
+    def save(self) -> None:
+        self.long_term["last_session"] = datetime.now().isoformat()
+        try:
+            self.memory_path.write_text(
+                json.dumps(self.long_term, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            logger.error("Failed to save memory: %s", e)
+
+    def load(self) -> None:
+        if not self.memory_path.exists():
+            return
+        try:
+            data = json.loads(self.memory_path.read_text(encoding="utf-8"))
+            self.long_term.update(data)
+            logger.info("Memory loaded: %d entries", len(self.long_term.get("user_preferences", {})))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Could not load memory file: %s", e)
+
+    @property
+    def entry_count(self) -> int:
+        return (
+            len(self.long_term.get("user_preferences", {}))
+            + len(self.long_term.get("notes", []))
+            + len(self.long_term.get("frequent_commands", {}))
+        )
+
+
+if __name__ == "__main__":
+    mem = Memory("test_memory.json")
+    mem.remember("favorite_city", "Jakarta")
+    mem.add_to_history("user", "What time is it?")
+    mem.add_to_history("assistant", "It's 9:00 AM.")
+    print("Recalled:", mem.recall("favorite_city"))
+    print("Context:", mem.get_context_window())
+    mem.save()
+    print("Saved. Entries:", mem.entry_count)
+    Path("test_memory.json").unlink(missing_ok=True)

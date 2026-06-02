@@ -1,0 +1,35 @@
+# Secrets — never commit these
+.env
+credentials.json
+token.json
+
+# Runtime data
+memory.json
+logs/
+claudia.pid
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

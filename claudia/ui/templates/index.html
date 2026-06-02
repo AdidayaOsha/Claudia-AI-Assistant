@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CLAUDIA — Control Interface</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <div class="hud-frame">
+
+    <!-- Header -->
+    <header class="hud-header">
+      <div class="header-left">
+        <div class="logo-ring"></div>
+        <div>
+          <h1 class="logo-text">CLAUDIA</h1>
+          <span class="logo-sub">AI PERSONAL ASSISTANT</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="status-indicator" id="status-dot"></div>
+        <span class="status-text" id="status-text">CONNECTING</span>
+      </div>
+    </header>
+
+    <!-- Main grid -->
+    <main class="hud-grid">
+
+      <!-- Transcript panel -->
+      <section class="panel panel-transcript">
+        <div class="panel-title">LIVE TRANSCRIPT</div>
+        <div class="transcript-body" id="transcript"></div>
+        <div class="input-row">
+          <input type="text" id="text-input" placeholder="Type a command…" autocomplete="off" />
+          <button id="send-btn">SEND</button>
+        </div>
+      </section>
+
+      <!-- Stats panel -->
+      <section class="panel panel-stats">
+        <div class="panel-title">SYSTEM STATUS</div>
+        <div class="stat-row">
+          <span class="stat-label">CPU</span>
+          <div class="bar-bg"><div class="bar-fill" id="cpu-bar"></div></div>
+          <span class="stat-value" id="cpu-val">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">RAM</span>
+          <div class="bar-bg"><div class="bar-fill" id="ram-bar"></div></div>
+          <span class="stat-value" id="ram-val">—</span>
+        </div>
+        <div class="stat-row uptime-row">
+          <span class="stat-label">UPTIME</span>
+          <span class="stat-value" id="uptime-val">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">LOCAL TIME</span>
+          <span class="stat-value" id="local-time">—</span>
+        </div>
+      </section>
+
+      <!-- Active skill -->
+      <section class="panel panel-skill">
+        <div class="panel-title">ACTIVE MODULE</div>
+        <div class="skill-display" id="skill-display">
+          <span class="skill-icon">◈</span>
+          <span class="skill-name" id="skill-name">STANDBY</span>
+        </div>
+      </section>
+
+      <!-- History sidebar -->
+      <section class="panel panel-history">
+        <div class="panel-title">SESSION LOG</div>
+        <ul class="history-list" id="history-list"></ul>
+      </section>
+
+    </main>
+
+  </div>
+
+  <script>
+    const socket = io();
+    const transcript = document.getElementById('transcript');
+    const historyList = document.getElementById('history-list');
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    const skillName = document.getElementById('skill-name');
+    const textInput = document.getElementById('text-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    socket.on('connect', () => {
+      statusDot.className = 'status-indicator online';
+      statusText.textContent = 'ONLINE';
+    });
+
+    socket.on('disconnect', () => {
+      statusDot.className = 'status-indicator offline';
+      statusText.textContent = 'OFFLINE';
+    });
+
+    socket.on('transcript', (data) => {
+      const div = document.createElement('div');
+      div.className = `msg msg-${data.role}`;
+      div.innerHTML = `<span class="msg-role">${data.role.toUpperCase()}</span><span class="msg-text">${escHtml(data.text)}</span>`;
+      transcript.appendChild(div);
+      transcript.scrollTop = transcript.scrollHeight;
+
+      // Add to history sidebar
+      const li = document.createElement('li');
+      li.textContent = data.text.substring(0, 60) + (data.text.length > 60 ? '…' : '');
+      li.className = `history-${data.role}`;
+      historyList.prepend(li);
+      if (historyList.children.length > 20) historyList.lastChild.remove();
+    });
+
+    socket.on('skill_active', (data) => {
+      skillName.textContent = data.skill.toUpperCase().replace('_', ' ');
+      skillName.classList.add('pulse');
+      setTimeout(() => skillName.classList.remove('pulse'), 1500);
+    });
+
+    // Stats polling
+    function updateStats() {
+      fetch('/api/stats')
+        .then(r => r.json())
+        .then(d => {
+          document.getElementById('cpu-val').textContent = d.cpu_percent.toFixed(1) + '%';
+          document.getElementById('ram-val').textContent = d.ram_percent.toFixed(1) + '%';
+          document.getElementById('uptime-val').textContent = d.uptime;
+          document.getElementById('cpu-bar').style.width = d.cpu_percent + '%';
+          document.getElementById('ram-bar').style.width = d.ram_percent + '%';
+        })
+        .catch(() => {});
+    }
+
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('local-time').textContent =
+        now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta', hour12: false });
+    }
+
+    setInterval(updateStats, 3000);
+    setInterval(updateClock, 1000);
+    updateStats();
+    updateClock();
+
+    // Text input
+    function sendInput() {
+      const text = textInput.value.trim();
+      if (!text) return;
+      socket.emit('user_input', { text });
+      textInput.value = '';
+    }
+    sendBtn.addEventListener('click', sendInput);
+    textInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendInput(); });
+
+    function escHtml(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+  </script>
+</body>
+</html>

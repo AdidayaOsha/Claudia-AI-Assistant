@@ -1,0 +1,77 @@
+assistant:
+  name: "Claudia"
+  wake_word: "hey claudia"
+  goodbye_phrases:
+    - "talk to you later"
+    - "see you later"
+    - "never mind"
+    - "that's enough"
+    - "stop listening"
+    - "stand by"
+    - "goodbye claudia"
+    - "bye claudia"
+    - "that's all claudia"
+    - "never mind claudia"
+    - "go to sleep claudia"
+
+user:
+  name: "Boss"
+  location: "Jakarta, Indonesia"
+  city: "Jakarta"
+  timezone: "Asia/Jakarta"
+  language: "en"
+  os: "Windows"
+
+llm:
+  primary: "claude"
+  primary_model: "claude-sonnet-4-6"
+  fallback: "openai"
+  fallback_model: "gpt-4o"
+  context_window: 10
+  max_retries: 3
+
+voice:
+  engine: "elevenlabs"       # "pyttsx3" | "elevenlabs"
+  rate: 175
+  volume: 0.9
+  elevenlabs_voice_id: "DODLEQrClDo8wCz460ld"
+
+listener:
+  energy_threshold: 150
+  silence_timeout: 3          # seconds of silence before processing
+  phrase_time_limit: 10       # max seconds per utterance
+  auto_text_fallback: true    # switch to text input if mic unavailable
+  conversation_timeout: 60    # seconds to stay attentive after last response
+  enable_barge_in: true       # stop Claudia immediately when user speaks over her
+  barge_in_threshold: 600     # RMS energy level; raise if speaker echo causes false triggers
+
+features:
+  enable_calendar: false      # requires credentials.json
+  enable_email: false         # requires credentials.json
+  enable_news: true
+  enable_weather: true
+
+dashboard:
+  port: 5000
+  host: "127.0.0.1"
+
+weather:
+  default_city: "Jakarta"
+  units: "metric"
+
+# User-defined app names → executable path or URI.
+# Add any app here to teach CLAUDIA how to open it without editing Python code.
+apps:
+  "service studio": "C:\\Program Files\\OutSystems\\Service Studio 11\\Service Studio\\ServiceStudio.exe"
+  "service studio 11": "C:\\Program Files\\OutSystems\\Service Studio 11\\Service Studio\\ServiceStudio.exe"
+  "outsystems": "C:\\Program Files\\OutSystems\\Service Studio 11\\Service Studio\\ServiceStudio.exe"
+  "teams": "msteams:"
+  "microsoft teams": "msteams:"
+
+memory:
+  file: "memory.json"
+  max_session_history: 50
+
+logging:
+  level: "INFO"
+  dir: "logs"

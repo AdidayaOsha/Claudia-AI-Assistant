@@ -15,10 +15,9 @@ class Assistant:
         self.config = config
         self.name: str = config.get("assistant", {}).get("name", "Claudia")
         self._running = threading.Event()
-        self._socket_emit: Callable | None = None  # injected by dashboard
-        self._command_queue: queue.Queue = queue.Queue()  # dashboard text input
+        self._socket_emit: Callable | None = None
+        self._command_queue: queue.Queue = queue.Queue()
 
-        # Lazy imports keep boot fast if a module fails
         from core.memory import Memory
         from core.brain import Brain
         from core.listener import Listener
@@ -27,19 +26,32 @@ class Assistant:
         from skills import load_all_skills
 
         mem_cfg = config.get("memory", {})
-        self.memory = Memory(mem_cfg.get("file", "memory.json"), mem_cfg.get("max_session_history", 50))
+        self.memory = Memory(
+            mem_cfg.get("file", "memory.json"),
+            mem_cfg.get("max_session_history", 50),
+            mem_cfg.get("max_reflections", 10),
+            mem_cfg.get("max_facts", 50),
+        )
+        self._enable_fact_extraction: bool = mem_cfg.get("enable_fact_extraction", True)
+        self._enable_reflection: bool = mem_cfg.get("enable_reflection", True)
+        self._min_turns_for_reflection: int = mem_cfg.get("min_turns_for_reflection", 4)
+
         self.brain = Brain(config)
         self.listener = Listener(config)
         self.speaker = Speaker(config)
         self.skills = load_all_skills(config)
         self.router = IntentRouter(self.skills, config)
-        self._research_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="research")
+        self._research_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="research"
+        )
+        self._memory_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="memory"
+        )
 
     def set_socket_emit(self, emit_fn: Callable) -> None:
         self._socket_emit = emit_fn
 
     def submit_text(self, text: str) -> None:
-        """Inject a command from the dashboard (or any external source) into the main loop."""
         if text:
             self._command_queue.put(text)
 
@@ -58,7 +70,6 @@ class Assistant:
         weather_skill = next((s for s in self.skills if isinstance(s, WeatherSkill)), None)
 
         now_str = time_skill.execute({"raw_input": "time and date"}) if time_skill else datetime.now().strftime("%A, %d %B %Y")
-        # Strip trailing period so it flows into the greeting naturally
         now_str = now_str.rstrip(".")
         weather_str = ""
         if weather_skill:
@@ -86,7 +97,6 @@ class Assistant:
 
         while self._running.is_set():
             try:
-                # Block until either mic or dashboard delivers a command
                 try:
                     user_input = self._command_queue.get(timeout=0.5)
                 except queue.Empty:
@@ -95,25 +105,24 @@ class Assistant:
                 if not user_input:
                     continue
 
-                # Stop Claudia mid-sentence if she's still talking (safety net / text-input path)
                 if self.speaker.is_speaking():
                     self.speaker.interrupt()
 
-                # Goodbye detected by listener (fast path) OR by assistant (safety net)
+                # Goodbye path — reflect on the session before saying farewell
                 if user_input == "__goodbye__" or self._is_goodbye(user_input):
                     self.listener.exit_conversation_mode()
+                    self._run_reflection()
                     farewell = "Understood. I'll be here when you need me."
                     logger.info("[CLAUDIA] %s", farewell)
                     self._emit("transcript", {"role": "user", "text": user_input if user_input != "__goodbye__" else ""})
                     self._emit("transcript", {"role": "assistant", "text": farewell})
                     self.memory.add_to_history("assistant", farewell)
                     self.speaker.speak(farewell)
-                    continue  # skip enter_conversation_mode()
+                    continue
 
                 logger.info("[USER] %s", user_input)
                 self._emit("transcript", {"role": "user", "text": user_input})
 
-                # Snapshot context BEFORE adding current turn so brain gets clean history
                 context_snapshot = self.memory.get_context_window(
                     self.config.get("llm", {}).get("context_window", 10)
                 )
@@ -125,8 +134,15 @@ class Assistant:
                 self._emit("transcript", {"role": "assistant", "text": response})
                 self.memory.add_to_history("assistant", response)
                 self.memory.increment_command((user_input.split() or ["unknown"])[0])
+
+                # Background: extract personal facts from this exchange
+                if self._enable_fact_extraction:
+                    self._memory_executor.submit(
+                        self._extract_and_save_facts, user_input, response
+                    )
+
                 self.speaker.speak(response)
-                self.listener.enter_conversation_mode()  # only reached for non-goodbye responses
+                self.listener.enter_conversation_mode()
 
             except KeyboardInterrupt:
                 logger.info("Shutting down.")
@@ -137,7 +153,6 @@ class Assistant:
         self.shutdown()
 
     def _start_listener_thread(self) -> None:
-        """Push microphone input into the shared command queue."""
         def _listen_loop():
             while self._running.is_set():
                 try:
@@ -162,7 +177,8 @@ class Assistant:
 
         if context is None:
             context = []
-        return self.brain.think(user_input, context)
+        memory_ctx = self.memory.get_memory_context()
+        return self.brain.think(user_input, context, memory_context=memory_ctx)
 
     def _process_skill(self, skill, params, user_input, context):
         """Execute a skill; skills with research_output=True inject results into the LLM."""
@@ -182,18 +198,56 @@ class Assistant:
             return f"I ran into an issue with {skill.name}. Standing by."
 
         if is_research and result:
+            memory_ctx = self.memory.get_memory_context()
             return self.brain.think(
                 user_input=user_input,
                 context=context or [],
                 research_context=result,
+                memory_context=memory_ctx,
             )
         return result
+
+    # ------------------------------------------------------------------ #
+    #  Memory helpers                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _extract_and_save_facts(self, user_input: str, response: str) -> None:
+        """Background worker — extract personal facts and persist them."""
+        try:
+            existing = self.memory.long_term.get("user_preferences", {})
+            facts = self.brain.extract_facts(user_input, response, existing)
+            for key, value in facts.items():
+                if key and value is not None:
+                    self.memory.save_fact(key, str(value))
+                    logger.info("Fact learned: %s = %s", key, value)
+        except Exception as e:
+            logger.debug("Fact extraction worker failed: %s", e)
+
+    def _run_reflection(self) -> None:
+        """Synchronously summarise the current session and persist it."""
+        if not self._enable_reflection:
+            return
+        if len(self.memory.session_history) < self._min_turns_for_reflection:
+            return
+        try:
+            summary = self.brain.reflect(self.memory.session_history)
+            if summary:
+                self.memory.save_reflection(summary)
+                logger.info("Session reflection saved: %s", summary)
+        except Exception as e:
+            logger.debug("Session reflection failed: %s", e)
+
+    # ------------------------------------------------------------------ #
+    #  Lifecycle                                                           #
+    # ------------------------------------------------------------------ #
 
     def stop(self) -> None:
         self._running.clear()
 
     def shutdown(self) -> None:
+        self._run_reflection()
         self.memory.save(force=True)
         self._research_executor.shutdown(wait=False)
+        self._memory_executor.shutdown(wait=False)
         self.speaker.stop()
         logger.info("CLAUDIA offline.")

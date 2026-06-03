@@ -71,6 +71,11 @@ apps:
 memory:
   file: "memory.json"
   max_session_history: 50
+  enable_fact_extraction: true   # extract personal facts from LLM conversations (1 extra API call/turn)
+  enable_reflection: true        # summarize each session on goodbye/shutdown
+  max_reflections: 10            # keep last N session summaries
+  max_facts: 50                  # cap stored facts to avoid prompt bloat
+  min_turns_for_reflection: 4    # only reflect if session had >= N turns
 
 research:
   enabled: true

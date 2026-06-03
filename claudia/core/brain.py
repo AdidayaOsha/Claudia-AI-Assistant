@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from typing import Generator
@@ -74,10 +75,29 @@ class Brain:
         else:
             logger.info("OPENAI_API_KEY not set — OpenAI fallback unavailable")
 
-    def think(self, user_input: str, context: list[dict], research_context: str | None = None) -> str:
-        messages = self._build_messages(user_input, context)
+    # ------------------------------------------------------------------ #
+    #  System prompt                                                       #
+    # ------------------------------------------------------------------ #
 
-        # Inject live web data as a context prefix
+    def _build_system_prompt(self, memory_context: str | None = None) -> str:
+        if memory_context:
+            return SYSTEM_PROMPT + "\n\n" + memory_context
+        return SYSTEM_PROMPT
+
+    # ------------------------------------------------------------------ #
+    #  Primary inference                                                   #
+    # ------------------------------------------------------------------ #
+
+    def think(
+        self,
+        user_input: str,
+        context: list[dict],
+        research_context: str | None = None,
+        memory_context: str | None = None,
+    ) -> str:
+        messages = self._build_messages(user_input, context)
+        system = self._build_system_prompt(memory_context)
+
         if research_context:
             from datetime import datetime
             import pytz
@@ -101,7 +121,7 @@ class Brain:
         if self._anthropic:
             for attempt in range(self.max_retries):
                 try:
-                    return self._think_anthropic(messages)
+                    return self._think_anthropic(messages, system)
                 except Exception as e:
                     self._last_error = str(e)
                     logger.error("Anthropic attempt %d failed: %s", attempt + 1, e, exc_info=True)
@@ -111,7 +131,7 @@ class Brain:
         if self._openai:
             for attempt in range(self.max_retries):
                 try:
-                    return self._think_openai(messages)
+                    return self._think_openai(messages, system)
                 except Exception as e:
                     self._last_error = str(e)
                     logger.error("OpenAI attempt %d failed: %s", attempt + 1, e, exc_info=True)
@@ -120,8 +140,15 @@ class Brain:
 
         return self._local_fallback(user_input)
 
-    def think_stream(self, user_input: str, context: list[dict], research_context: str | None = None) -> Generator[str, None, None]:
+    def think_stream(
+        self,
+        user_input: str,
+        context: list[dict],
+        research_context: str | None = None,
+        memory_context: str | None = None,
+    ) -> Generator[str, None, None]:
         messages = self._build_messages(user_input, context)
+        system = self._build_system_prompt(memory_context)
 
         if research_context:
             from datetime import datetime
@@ -140,32 +167,92 @@ class Brain:
                 ),
             })
             messages = self._sanitize_messages(messages, user_input)
+
         if self._anthropic:
             try:
-                yield from self._stream_anthropic(messages)
+                yield from self._stream_anthropic(messages, system)
                 return
             except Exception as e:
                 logger.error("Anthropic streaming failed: %s", e, exc_info=True)
 
         if self._openai:
             try:
-                yield from self._stream_openai(messages)
+                yield from self._stream_openai(messages, system)
                 return
             except Exception as e:
                 logger.error("OpenAI streaming failed: %s", e, exc_info=True)
 
         yield self._local_fallback(user_input)
 
+    # ------------------------------------------------------------------ #
+    #  Memory helpers — called from assistant background threads          #
+    # ------------------------------------------------------------------ #
 
+    def extract_facts(
+        self,
+        user_input: str,
+        response: str,
+        existing_facts: dict,
+    ) -> dict:
+        """Extract personal facts from a single exchange. Returns {} on failure or nothing found."""
+        if not self._anthropic:
+            return {}
+        prompt = (
+            "Extract any personal facts, preferences, or important information the user revealed.\n"
+            "Return ONLY a JSON object like {\"key\": \"value\"} or {} if nothing notable.\n"
+            "Keys must be short snake_case labels (e.g. wife_name, prefers_morning_coffee).\n"
+            "Max 3 facts. Do not re-extract facts already known.\n\n"
+            f"User said: \"{user_input[:300]}\"\n"
+            f"Assistant replied: \"{response[:200]}\"\n"
+            f"Already known: {json.dumps(existing_facts)[:400]}"
+        )
+        try:
+            result = self._anthropic.messages.create(
+                model=self.primary_model,
+                max_tokens=120,
+                system="You are a fact extractor. Return ONLY valid JSON, nothing else. No markdown.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = result.content[0].text.strip()
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception as e:
+            logger.debug("Fact extraction failed: %s", e)
+            return {}
+
+    def reflect(self, session_history: list[dict]) -> str:
+        """Summarise a session in one sentence (≤20 words)."""
+        if not self._anthropic or not session_history:
+            return ""
+        turns = session_history[-20:]
+        dialogue = "\n".join(
+            f"{m['role'].upper()}: {m['content'][:120]}" for m in turns
+        )
+        try:
+            result = self._anthropic.messages.create(
+                model=self.primary_model,
+                max_tokens=60,
+                system=(
+                    "Summarise this conversation in ONE sentence, max 20 words. "
+                    "Focus on what was done or discussed. Be specific. No filler."
+                ),
+                messages=[{"role": "user", "content": dialogue}],
+            )
+            return result.content[0].text.strip()
+        except Exception as e:
+            logger.debug("Reflection failed: %s", e)
+            return ""
+
+    # ------------------------------------------------------------------ #
+    #  Internal helpers                                                    #
+    # ------------------------------------------------------------------ #
 
     def _build_messages(self, user_input: str, context: list[dict]) -> list[dict]:
-        """Build a valid alternating-role message list for the Anthropic API."""
         raw = list(context[-self.context_window:])
         raw.append({"role": "user", "content": user_input})
         return self._sanitize_messages(raw, user_input)
 
     def _sanitize_messages(self, messages: list[dict], user_input: str = "") -> list[dict]:
-        """Ensure messages alternate roles correctly for the Anthropic API."""
         if not messages:
             if user_input:
                 return [{"role": "user", "content": user_input}]
@@ -183,18 +270,18 @@ class Brain:
             sanitized.append({"role": "user", "content": user_input})
         return sanitized
 
-    def _think_anthropic(self, messages: list[dict]) -> str:
-        logger.debug("Sending %d messages to Anthropic: %s", len(messages), [m["role"] for m in messages])
+    def _think_anthropic(self, messages: list[dict], system: str) -> str:
+        logger.debug("Sending %d messages to Anthropic", len(messages))
         response = self._anthropic.messages.create(
             model=self.primary_model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=system,
             messages=messages,
         )
         return response.content[0].text
 
-    def _think_openai(self, messages: list[dict]) -> str:
-        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+    def _think_openai(self, messages: list[dict], system: str) -> str:
+        full_messages = [{"role": "system", "content": system}] + messages
         response = self._openai.chat.completions.create(
             model=self.fallback_model,
             messages=full_messages,
@@ -202,18 +289,18 @@ class Brain:
         )
         return response.choices[0].message.content
 
-    def _stream_anthropic(self, messages: list[dict]) -> Generator[str, None, None]:
+    def _stream_anthropic(self, messages: list[dict], system: str) -> Generator[str, None, None]:
         with self._anthropic.messages.stream(
             model=self.primary_model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=system,
             messages=messages,
         ) as stream:
             for text in stream.text_stream:
                 yield text
 
-    def _stream_openai(self, messages: list[dict]) -> Generator[str, None, None]:
-        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+    def _stream_openai(self, messages: list[dict], system: str) -> Generator[str, None, None]:
+        full_messages = [{"role": "system", "content": system}] + messages
         stream = self._openai.chat.completions.create(
             model=self.fallback_model,
             messages=full_messages,

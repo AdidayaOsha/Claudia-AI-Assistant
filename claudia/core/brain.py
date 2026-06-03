@@ -29,7 +29,12 @@ Current user context:
 - Location: Jakarta, Indonesia
 - Timezone: Asia/Jakarta (UTC+7)
 - Primary language: English
-- Operating system: Windows"""
+- Operating system: Windows
+- Live web research: available via DuckDuckGo + Wikipedia + page scraping. \
+Triggered automatically when queries contain action phrases (e.g. "search for", \
+"look up", "what's happening", "latest news on"). When live data is provided, \
+it appears as [LIVE WEB DATA] above the user message — use it and prefer it \
+over your training knowledge for anything time-sensitive."""
 
 
 class Brain:

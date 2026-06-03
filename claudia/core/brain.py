@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from typing import Generator
+from typing import Callable, Generator
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +31,35 @@ Current user context:
 - Timezone: Asia/Jakarta (UTC+7)
 - Primary language: English
 - Operating system: Windows
-- Live web research: available via DuckDuckGo + Wikipedia + page scraping. \
-Triggered automatically when queries contain action phrases (e.g. "search for", \
-"look up", "what's happening", "latest news on"). When live data is provided, \
-it appears as [LIVE WEB DATA] above the user message — use it and prefer it \
-over your training knowledge for anything time-sensitive."""
+- Live web research: you have a web_research tool — call it autonomously whenever \
+you need current data, are uncertain about a time-sensitive fact, or the user \
+challenges your knowledge. No trigger phrases required. When pre-fetched data \
+appears as [LIVE WEB DATA], prefer it over training knowledge."""
+
+# Tool schema exposed to Claude — enables autonomous web search decisions
+RESEARCH_TOOL = {
+    "name": "web_research",
+    "description": (
+        "Search the internet for real-time information. Use when:\n"
+        "- The topic requires data from after your training cutoff\n"
+        "- The user asks about current events, live scores, recent news, or prices\n"
+        "- You are uncertain about a time-sensitive fact\n"
+        "- The user challenges your knowledge and you need to verify\n"
+        "- Answering well requires up-to-date facts\n"
+        "Do NOT use for general knowledge you can answer confidently from training."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Precise search query"},
+        },
+        "required": ["query"],
+    },
+}
 
 
 class Brain:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, research_fn: Callable[[str], str] | None = None):
         self.config = config
         self.llm_config = config.get("llm", {})
         self.context_window = self.llm_config.get("context_window", 10)
@@ -49,6 +69,7 @@ class Brain:
         self._anthropic = None
         self._openai = None
         self._last_error: str = ""
+        self._research_fn = research_fn  # injected by assistant; callable(query) -> str
         self._init_clients()
 
     def _init_clients(self) -> None:
@@ -98,6 +119,7 @@ class Brain:
         messages = self._build_messages(user_input, context)
         system = self._build_system_prompt(memory_context)
 
+        # Pre-fetched research context (from movies/research_output skills — inject directly)
         if research_context:
             from datetime import datetime
             import pytz
@@ -121,7 +143,9 @@ class Brain:
         if self._anthropic:
             for attempt in range(self.max_retries):
                 try:
-                    return self._think_anthropic(messages, system)
+                    if research_context or not self._research_fn:
+                        return self._think_anthropic(messages, system)
+                    return self._think_with_tools(messages, system)
                 except Exception as e:
                     self._last_error = str(e)
                     logger.error("Anthropic attempt %d failed: %s", attempt + 1, e, exc_info=True)
@@ -185,6 +209,63 @@ class Brain:
         yield self._local_fallback(user_input)
 
     # ------------------------------------------------------------------ #
+    #  Tool-use loop (autonomous web research)                            #
+    # ------------------------------------------------------------------ #
+
+    def _think_with_tools(self, messages: list[dict], system: str) -> str:
+        current_messages = list(messages)
+
+        for iteration in range(5):
+            response = self._anthropic.messages.create(
+                model=self.primary_model,
+                max_tokens=1024,
+                system=system,
+                tools=[RESEARCH_TOOL],
+                tool_choice={"type": "auto"},
+                messages=current_messages,
+            )
+
+            if response.stop_reason == "tool_use":
+                tool_block = next(
+                    (b for b in response.content if b.type == "tool_use"), None
+                )
+                if tool_block is None:
+                    break
+
+                query = tool_block.input.get("query", "")
+                logger.info("Tool call: web_research(query=%r)", query)
+
+                try:
+                    result = self._research_fn(query)
+                except Exception as e:
+                    logger.warning("Research tool error: %s", e)
+                    result = f"Search failed: {e}"
+
+                # Append assistant tool_use turn + tool result turn
+                current_messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                })
+                current_messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_block.id,
+                            "content": result or "No results found.",
+                        }
+                    ],
+                })
+            else:
+                # end_turn — gather all text blocks and return
+                return "".join(
+                    b.text for b in response.content
+                    if hasattr(b, "text") and b.text
+                )
+
+        return "I searched but couldn't complete the response. Please try again."
+
+    # ------------------------------------------------------------------ #
     #  Memory helpers — called from assistant background threads          #
     # ------------------------------------------------------------------ #
 
@@ -194,14 +275,12 @@ class Brain:
         response: str,
         existing_facts: dict,
     ) -> dict:
-        """Extract personal facts from a single exchange. Returns {} on failure or nothing found."""
         if not self._anthropic:
             return {}
         prompt = (
             "Extract any personal facts, preferences, or important information the user revealed.\n"
             "Return ONLY a JSON object like {\"key\": \"value\"} or {} if nothing notable.\n"
-            "Keys must be short snake_case labels (e.g. wife_name, prefers_morning_coffee).\n"
-            "Max 3 facts. Do not re-extract facts already known.\n\n"
+            "Keys must be short snake_case labels. Max 3 facts. Do not re-extract known facts.\n\n"
             f"User said: \"{user_input[:300]}\"\n"
             f"Assistant replied: \"{response[:200]}\"\n"
             f"Already known: {json.dumps(existing_facts)[:400]}"
@@ -221,7 +300,6 @@ class Brain:
             return {}
 
     def reflect(self, session_history: list[dict]) -> str:
-        """Summarise a session in one sentence (≤20 words)."""
         if not self._anthropic or not session_history:
             return ""
         turns = session_history[-20:]

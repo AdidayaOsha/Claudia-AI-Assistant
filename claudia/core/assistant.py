@@ -36,7 +36,12 @@ class Assistant:
         self._enable_reflection: bool = mem_cfg.get("enable_reflection", True)
         self._min_turns_for_reflection: int = mem_cfg.get("min_turns_for_reflection", 4)
 
-        self.brain = Brain(config)
+        research_skill = next((s for s in self.skills if s.name == "research"), None)
+        research_fn = (
+            (lambda q: research_skill.execute({"query": q, "raw_input": q}))
+            if research_skill else None
+        )
+        self.brain = Brain(config, research_fn=research_fn)
         self.listener = Listener(config)
         self.speaker = Speaker(config)
         self.skills = load_all_skills(config)

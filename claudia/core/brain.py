@@ -212,6 +212,21 @@ class Brain:
     #  Tool-use loop (autonomous web research)                            #
     # ------------------------------------------------------------------ #
 
+    def _serialize_content(self, content) -> list[dict]:
+        """Convert Anthropic SDK content blocks to plain dicts for re-use in messages."""
+        out = []
+        for block in content:
+            if block.type == "text":
+                out.append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                out.append({
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                })
+        return out
+
     def _think_with_tools(self, messages: list[dict], system: str) -> str:
         current_messages = list(messages)
 
@@ -244,7 +259,7 @@ class Brain:
                 # Append assistant tool_use turn + tool result turn
                 current_messages.append({
                     "role": "assistant",
-                    "content": response.content,
+                    "content": self._serialize_content(response.content),
                 })
                 current_messages.append({
                     "role": "user",

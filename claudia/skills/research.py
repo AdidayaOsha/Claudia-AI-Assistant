@@ -99,11 +99,11 @@ class ResearchOrchestrator(Skill):
     async def _gather(self, query: str) -> list[dict]:
         tasks = []
         if self.use_ddg:
-            tasks.append(self._fetch_ddg(query))
+            tasks.append(asyncio.create_task(self._fetch_ddg(query)))
         if self.use_brave:
-            tasks.append(self._fetch_brave(query))
+            tasks.append(asyncio.create_task(self._fetch_brave(query)))
         if self.use_wikipedia:
-            tasks.append(self._fetch_wikipedia(query))
+            tasks.append(asyncio.create_task(self._fetch_wikipedia(query)))
 
         done, pending = await asyncio.wait(tasks, timeout=self.timeout)
         if pending:

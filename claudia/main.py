@@ -1,6 +1,7 @@
 import atexit
 import logging
 import os
+import socket as _socket
 import sys
 import threading
 from pathlib import Path
@@ -9,25 +10,29 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-PID_FILE = project_root / "claudia.pid"
+_lock_socket = None
 
 
-def _acquire_lock() -> None:
-    """Prevent multiple CLAUDIA instances from running simultaneously."""
-    if PID_FILE.exists():
-        try:
-            old_pid = int(PID_FILE.read_text().strip())
-            import psutil
-            if psutil.pid_exists(old_pid):
-                print(f"[CLAUDIA] Already running (PID {old_pid}). Stop the existing instance first.")
-                sys.exit(1)
-        except (ValueError, ImportError):
-            pass  # stale or unreadable — overwrite
-    PID_FILE.write_text(str(os.getpid()))
-    atexit.register(lambda: PID_FILE.unlink(missing_ok=True))
+def _acquire_socket_lock() -> None:
+    """Prevent multiple CLAUDIA instances via a loopback socket lock.
+
+    Binding to 127.0.0.1:65432 succeeds only for the first instance; the OS
+    releases the socket automatically when the process exits for any reason,
+    so there are no stale lock files to clean up.
+    """
+    global _lock_socket
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 0)
+    try:
+        s.bind(("127.0.0.1", 65432))
+    except OSError:
+        print("[CLAUDIA] Already running — stop the existing instance first.")
+        sys.exit(1)
+    _lock_socket = s
+    atexit.register(s.close)
 
 
-_acquire_lock()
+_acquire_socket_lock()
 
 from dotenv import load_dotenv
 load_dotenv(project_root / ".env")

@@ -159,21 +159,32 @@ class Speaker:
 
         pa = None
         stream = None
-        try:
-            pa = pyaudio.PyAudio()
-            stream = pa.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=16000,
-                input=True,
-                frames_per_buffer=1024,
-            )
-        except OSError:
-            logger.warning("VAD monitor unavailable — microphone already in use")
-            self._vad_disabled = True
-            return
-        except Exception as e:
-            logger.debug("VAD monitor open error: %s", e)
+        # Retry opening the mic — the listener thread may hold it briefly after
+        # releasing it between listen() calls; wait up to 3 s for it to free up.
+        for attempt in range(20):
+            try:
+                pa = pyaudio.PyAudio()
+                stream = pa.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=16000,
+                    input=True,
+                    frames_per_buffer=1024,
+                )
+                break
+            except OSError:
+                try:
+                    pa.terminate()
+                except Exception:
+                    pass
+                pa = None
+                if attempt < 19:
+                    time.sleep(0.15)
+            except Exception as e:
+                logger.debug("VAD monitor open error: %s", e)
+                return
+        if stream is None:
+            logger.warning("VAD monitor: mic still busy after retries — barge-in skipped this turn")
             return
 
         # VAD loop — only reached if stream opened successfully

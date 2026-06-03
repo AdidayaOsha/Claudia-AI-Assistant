@@ -7,15 +7,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Patterns that indicate a real-time / current-data query
+RESEARCH_PATTERNS = [
+    r"\bsearch (for|about)\b",
+    r"\blook up\b",
+    r"\bfind (information|info|details) (about|on)\b",
+    r"\bwhat('s| is) (happening|the latest|current|going on)\b",
+    r"\blatest (news|update|version|release|price|score)\b",
+    r"\bwho is .+ (right now|currently|today|in \d{4})\b",
+    r"\breal.?time\b",
+    r"\bright now\b",
+    r"\bas of (today|this week|this year)\b",
+    r"\bcurrently\b",
+    r"\brecently\b",
+    r"\btoday('s)?\b.*(price|score|result|news|update)",
+]
+
+
+def _is_research_query(text: str) -> bool:
+    """Return True if query requires live web data."""
+    t = text.lower()
+    return any(re.search(p, t) for p in RESEARCH_PATTERNS)
+
 
 class IntentRouter:
-    def __init__(self, skills: list["Skill"]):
+    def __init__(self, skills: list["Skill"], config: dict | None = None):
         self.skills = skills
+        self.config = config or {}
         self._trigger_map: dict[str, "Skill"] = {}
         self._build_trigger_map()
 
     def _build_trigger_map(self) -> None:
         for skill in self.skills:
+            if skill.name == "research":
+                continue  # research is only reached via regex fallback, not exact triggers
             for trigger in skill.triggers:
                 self._trigger_map[trigger.lower()] = skill
         logger.info("IntentRouter loaded %d skills, %d triggers", len(self.skills), len(self._trigger_map))
@@ -40,6 +65,14 @@ class IntentRouter:
             params = self._extract_params(user_input, best_skill)
             logger.debug("Routed '%s' → %s", user_input, best_skill.name)
             return best_skill, params
+
+        # Research fallback — only when no existing skill matched
+        research_cfg = self.config.get("research", {})
+        if research_cfg.get("enabled") and _is_research_query(normalized):
+            research_skill = next((s for s in self.skills if s.name == "research"), None)
+            if research_skill:
+                logger.debug("Routed '%s' → research (regex match)", user_input)
+                return research_skill, {"raw_input": user_input, "query": user_input, "text": user_input}
 
         logger.debug("No skill matched '%s' — routing to Brain", user_input)
         return None, {}

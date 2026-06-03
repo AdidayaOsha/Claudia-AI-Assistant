@@ -23,6 +23,13 @@ pyautogui>=0.9.54
 # Search
 duckduckgo-search>=5.0
 
+# Research / web scraping
+httpx>=0.27.0
+beautifulsoup4>=4.12.3
+lxml>=5.2.1
+trafilatura>=1.9.0
+cachetools>=5.3.3
+
 pytz>=2024.1
 elevenlabs>=2.0
 pygame>=2.6

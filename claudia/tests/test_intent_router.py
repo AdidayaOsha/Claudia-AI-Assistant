@@ -17,65 +17,91 @@ class MockSkill(Skill):
         return f"{self.name} executed"
 
 
+# Use multi-word triggers matching the real skill conventions
 SKILLS = [
-    MockSkill("time_date", ["time", "date", "day", "what time"]),
-    MockSkill("weather", ["weather", "forecast", "temperature"]),
-    MockSkill("web_search", ["search", "look up", "find"]),
-    MockSkill("jokes_facts", ["joke", "funny", "fact", "trivia"]),
-    MockSkill("app_launcher", ["open", "launch", "start"]),
-    MockSkill("news_briefing", ["news", "headlines", "briefing"]),
+    MockSkill("time_date", ["what time", "what day", "current time", "what's the time", "what day is it", "what's the date"]),
+    MockSkill("weather", ["weather", "forecast", "temperature", "what's the weather", "weather in"]),
+    MockSkill("web_search", ["search for", "look up", "google", "find information", "find out about"]),
+    MockSkill("jokes_facts", ["tell me a joke", "fun fact", "did you know", "tell a joke"]),
+    MockSkill("app_launcher", ["open app", "open chrome", "launch app", "start app", "open notepad", "browse to"]),
+    MockSkill("news_briefing", ["latest news", "news briefing", "top headlines", "morning briefing"]),
+    MockSkill("research", ["search for", "look up", "find information about", "latest news about", "right now", "as of today"]),
 ]
+CONFIG = {"research": {"enabled": True}}
 
 
 class TestIntentRouter:
-    def _router(self):
-        return IntentRouter(SKILLS)
+    def _router(self, config=None):
+        return IntentRouter(SKILLS, config or CONFIG)
 
     def test_routes_time_query(self):
         router = self._router()
-        skill, _ = router.route("What time is it?")
+        skill, _ = router.route("what time is it?")
         assert skill is not None
         assert skill.name == "time_date"
 
     def test_routes_weather_query(self):
         router = self._router()
-        skill, _ = router.route("What's the weather like today?")
+        skill, _ = router.route("what's the weather like today?")
         assert skill is not None
         assert skill.name == "weather"
 
-    def test_routes_search_query(self):
+    def test_routes_search_query_to_web_search(self):
         router = self._router()
-        skill, _ = router.route("Search for Python tutorials")
+        skill, _ = router.route("search for Python tutorials")
         assert skill is not None
-        assert skill.name == "web_search"
+        assert skill.name == "web_search", f"Expected web_search, got {skill.name}"
 
     def test_routes_joke_query(self):
         router = self._router()
-        skill, _ = router.route("Tell me a joke")
+        skill, _ = router.route("tell me a joke")
         assert skill is not None
         assert skill.name == "jokes_facts"
 
     def test_routes_app_launch(self):
         router = self._router()
-        skill, _ = router.route("Open Chrome")
+        skill, _ = router.route("open chrome")
         assert skill is not None
         assert skill.name == "app_launcher"
 
     def test_routes_news(self):
         router = self._router()
-        skill, _ = router.route("Give me the news headlines")
+        skill, _ = router.route("latest news headlines")
         assert skill is not None
         assert skill.name == "news_briefing"
 
+    def test_routes_research_via_regex_when_no_other_skill_matches(self):
+        router = self._router()
+        skill, _ = router.route("what is happening in Jakarta right now")
+        assert skill is not None
+        assert skill.name == "research", f"Expected research, got {skill.name}"
+
+    def test_routes_research_via_as_of_today_pattern(self):
+        router = self._router()
+        skill, _ = router.route("as of today what is the price of gold")
+        assert skill is not None
+        assert skill.name == "research"
+
+    def test_research_skip_when_existing_skill_matches(self):
+        router = self._router()
+        skill, _ = router.route("search for python in the morning")
+        # web_search triggers match "search for" — research is not checked
+        assert skill.name == "web_search"
+
+    def test_research_disabled_when_config_disabled(self):
+        router = self._router({"research": {"enabled": False}})
+        skill, _ = router.route("what is happening in Jakarta right now")
+        assert skill is None
+
     def test_no_match_returns_none(self):
         router = self._router()
-        skill, params = router.route("How are you doing today?")
+        skill, params = router.route("how are you doing today?")
         assert skill is None
         assert params == {}
 
     def test_params_contain_raw_input(self):
         router = self._router()
-        skill, params = router.route("What time is it in Tokyo?")
+        skill, params = router.route("what time is it in Tokyo?")
         assert skill is not None
         assert "raw_input" in params
         assert "time" in params["raw_input"].lower()

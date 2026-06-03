@@ -38,14 +38,14 @@ import yaml
 def _setup_logging(config: dict) -> None:
     log_dir = project_root / config.get("logging", {}).get("dir", "logs")
     log_dir.mkdir(exist_ok=True)
-    from datetime import datetime
-    log_file = log_dir / f"claudia_{datetime.now().strftime('%Y%m%d')}.log"
+    from logging.handlers import TimedRotatingFileHandler
+    log_file = log_dir / "claudia.log"
     level = getattr(logging, config.get("logging", {}).get("level", "INFO"))
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
         handlers=[
-            logging.FileHandler(str(log_file), encoding="utf-8"),
+            TimedRotatingFileHandler(str(log_file), when="midnight", backupCount=14, encoding="utf-8"),
             logging.StreamHandler(sys.stdout),
         ],
     )
@@ -86,6 +86,16 @@ def main() -> None:
     from skills import load_all_skills
     skills = load_all_skills(config)
     _print_status(f"Skill modules loaded: {len(skills)} skills")
+
+    # Research module status
+    research_cfg = config.get("research", {})
+    if research_cfg.get("enabled"):
+        sources = research_cfg.get("sources", {})
+        brave_key = os.environ.get("BRAVE_API_KEY", "").strip()
+        brave_status = "[OK]" if (sources.get("brave_search") and brave_key) else "[no key]"
+        logger.info(f"[CLAUDIA] Research: DDG [OK] | Wikipedia [OK] | Brave {brave_status} | Cache TTL={research_cfg.get('cache_ttl_seconds', 300)}s [OK]")
+    else:
+        logger.info("[CLAUDIA] Research: disabled (research.enabled: false in config.yaml)")
 
     # Dashboard (background thread)
     dashboard_thread = None

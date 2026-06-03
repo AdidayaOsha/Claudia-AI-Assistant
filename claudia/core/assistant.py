@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import queue
 import threading
@@ -25,13 +26,14 @@ class Assistant:
         from core.intent_router import IntentRouter
         from skills import load_all_skills
 
-        self.memory = Memory(config.get("memory", {}).get("file", "memory.json"))
+        mem_cfg = config.get("memory", {})
+        self.memory = Memory(mem_cfg.get("file", "memory.json"), mem_cfg.get("max_session_history", 50))
         self.brain = Brain(config)
         self.listener = Listener(config)
         self.speaker = Speaker(config)
         self.skills = load_all_skills(config)
-        self.router = IntentRouter(self.skills)
-        self._first_interaction = True
+        self.router = IntentRouter(self.skills, config)
+        self._research_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="research")
 
     def set_socket_emit(self, emit_fn: Callable) -> None:
         self._socket_emit = emit_fn
@@ -61,9 +63,14 @@ class Assistant:
         weather_str = ""
         if weather_skill:
             try:
-                wx = weather_skill.execute({})
+                _wxpool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                wx_future = _wxpool.submit(weather_skill.execute, {})
+                wx = wx_future.result(timeout=3)
                 if "unavailable" not in wx and "not configured" not in wx:
                     weather_str = " " + wx
+                _wxpool.shutdown(wait=False)
+            except concurrent.futures.TimeoutError:
+                pass
             except Exception:
                 pass
 
@@ -117,7 +124,7 @@ class Assistant:
                 logger.info("[CLAUDIA] %s", response)
                 self._emit("transcript", {"role": "assistant", "text": response})
                 self.memory.add_to_history("assistant", response)
-                self.memory.increment_command(user_input.split()[0] if user_input else "unknown")
+                self.memory.increment_command((user_input.split() or ["unknown"])[0])
                 self.speaker.speak(response)
                 self.listener.enter_conversation_mode()  # only reached for non-goodbye responses
 
@@ -151,22 +158,41 @@ class Assistant:
     def _process(self, user_input: str, context: list[dict] | None = None) -> str:
         skill, params = self.router.route(user_input)
         if skill:
-            self._emit("skill_active", {"skill": skill.name})
-            try:
-                return skill.execute(params)
-            except Exception as e:
-                logger.error("Skill '%s' failed: %s", skill.name, e)
-                return f"I ran into an issue with {skill.name}. Standing by."
+            return self._process_skill(skill, params, user_input, context)
 
-        # context snapshot was taken before the current user turn was added to history
         if context is None:
             context = []
         return self.brain.think(user_input, context)
+
+    def _process_skill(self, skill, params, user_input, context):
+        """Execute a skill, handling research specially (context injection vs spoken response)."""
+        self._emit("skill_active", {"skill": skill.name})
+        try:
+            if skill.name == "research":
+                future = self._research_executor.submit(skill.execute, params)
+                result = future.result(timeout=30)
+            else:
+                result = skill.execute(params)
+        except concurrent.futures.TimeoutError:
+            logger.error("Research timed out after 30s")
+            return "I wasn't able to pull live data on that."
+        except Exception as e:
+            logger.error("Skill '%s' failed: %s", skill.name, e)
+            return f"I ran into an issue with {skill.name}. Standing by."
+
+        if skill.name == "research" and result:
+            return self.brain.think(
+                user_input=user_input,
+                context=context or [],
+                research_context=result,
+            )
+        return result
 
     def stop(self) -> None:
         self._running.clear()
 
     def shutdown(self) -> None:
-        self.memory.save()
+        self.memory.save(force=True)
+        self._research_executor.shutdown(wait=False)
         self.speaker.stop()
         logger.info("CLAUDIA offline.")

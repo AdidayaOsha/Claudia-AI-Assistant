@@ -11,11 +11,7 @@ class Listener:
     def __init__(self, config: dict):
         cfg = config.get("listener", {})
         self.wake_word: str = config.get("assistant", {}).get("wake_word", "hey claudia").lower()
-        self.goodbye_phrases: list[str] = config.get("assistant", {}).get(
-            "goodbye_phrases",
-            ["talk to you later", "see you later", "never mind", "that's enough",
-             "stop listening", "stand by", "goodbye claudia", "bye claudia", "that's all claudia"]
-        )
+        self.goodbye_phrases: list[str] = config.get("assistant", {}).get("goodbye_phrases", [])
         self.energy_threshold: int = cfg.get("energy_threshold", 300)
         self.silence_timeout: int = cfg.get("silence_timeout", 3)
         self.phrase_time_limit: int = cfg.get("phrase_time_limit", 10)
@@ -49,7 +45,8 @@ class Listener:
                 self._recognizer.adjust_for_ambient_noise(source, duration=1)
             logger.info("Calibration complete. Energy threshold: %.0f", self._recognizer.energy_threshold)
         except Exception as e:
-            logger.warning("Calibration failed: %s", e)
+            logger.warning("Calibration failed: %s — switching to text input mode", e)
+            self._text_mode = True
 
     def enter_conversation_mode(self) -> None:
         """Call this after each CLAUDIA response to keep mic open for follow-ups."""
@@ -95,7 +92,9 @@ class Listener:
             # In text mode, strip wake word if present but don't require it
             lower = text.lower()
             if self.wake_word in lower:
-                return lower.replace(self.wake_word, "").strip() or text
+                wake_idx = lower.index(self.wake_word)
+                command = (text[:wake_idx] + text[wake_idx + len(self.wake_word):]).strip()
+                return command or text
             return text
 
         import speech_recognition as sr
@@ -120,7 +119,8 @@ class Listener:
             # Wake word detected — activate conversation mode and return command
             if self.wake_word in lower:
                 self.enter_conversation_mode()
-                command = lower.replace(self.wake_word, "").strip()
+                wake_idx = lower.index(self.wake_word)
+                command = (text[:wake_idx] + text[wake_idx + len(self.wake_word):]).strip()
                 return command or self._prompt_follow_up()
 
             # Already in conversation mode — accept without wake word
@@ -144,7 +144,7 @@ class Listener:
         import speech_recognition as sr
         try:
             with self._microphone as source:
-                audio = self._recognizer.listen(source, phrase_time_limit=self.phrase_time_limit)
+                audio = self._recognizer.listen(source, timeout=5, phrase_time_limit=self.phrase_time_limit)
             return self._transcribe(audio)
         except Exception:
             return None

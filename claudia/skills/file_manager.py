@@ -11,7 +11,6 @@ SEARCH_ROOTS = [
     Path.home() / "Documents",
     Path.home() / "Desktop",
     Path.home() / "Downloads",
-    Path.home(),
 ]
 
 MAX_RESULTS = 5

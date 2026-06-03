@@ -48,8 +48,10 @@ class Speaker:
     def _init_elevenlabs(self) -> None:
         try:
             import os
+            import pygame
             from elevenlabs import ElevenLabs
             self._eleven = ElevenLabs(api_key=os.environ.get("ELEVENLABS_API_KEY", ""))
+            pygame.mixer.init(frequency=22050, size=-16, channels=1)
             logger.info("ElevenLabs TTS initialized")
         except Exception as e:
             logger.warning("ElevenLabs init failed (%s) — falling back to pyttsx3", e)
@@ -100,16 +102,14 @@ class Speaker:
                 output_format="pcm_22050",
             )
             pcm_bytes = b"".join(audio_iter)
-            # Wrap raw PCM in a WAV container so pygame can decode it
             import wave
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:
                 wf.setnchannels(1)
-                wf.setsampwidth(2)   # 16-bit
+                wf.setsampwidth(2)
                 wf.setframerate(22050)
                 wf.writeframes(pcm_bytes)
             buf.seek(0)
-            pygame.mixer.init(frequency=22050, size=-16, channels=1)
             sound = pygame.mixer.Sound(buf)
             sound.play()
             self._start_vad_monitor()
@@ -129,6 +129,8 @@ class Speaker:
 
     def _start_vad_monitor(self) -> None:
         if not self._barge_in_enabled:
+            return
+        if getattr(self, '_vad_disabled', False):
             return
         t = threading.Thread(target=self._vad_worker, daemon=True, name="VAD")
         t.start()
@@ -166,10 +168,18 @@ class Speaker:
                 input=True,
                 frames_per_buffer=1024,
             )
-            # Let the room echo from TTS onset settle before watching
-            time.sleep(0.3)
+        except OSError:
+            logger.warning("VAD monitor unavailable — microphone already in use")
+            self._vad_disabled = True
+            return
+        except Exception as e:
+            logger.debug("VAD monitor open error: %s", e)
+            return
 
-            consecutive_loud = 0
+        # VAD loop — only reached if stream opened successfully
+        time.sleep(0.3)
+        consecutive_loud = 0
+        try:
             while self._speaking and not self._interrupted.is_set():
                 try:
                     data = stream.read(1024, exception_on_overflow=False)
@@ -184,8 +194,6 @@ class Speaker:
                         consecutive_loud = 0
                 except Exception:
                     break
-        except Exception as e:
-            logger.debug("VAD monitor error: %s", e)
         finally:
             if stream is not None:
                 try:
@@ -227,7 +235,6 @@ class Speaker:
         """Queue text for non-blocking TTS output."""
         if not text:
             return
-        self._drain_queue()  # interrupt current speech by clearing queue
         self._queue.put(text)
 
     def speak_sync(self, text: str) -> None:

@@ -59,9 +59,13 @@ class WeatherSkill(Skill):
         for keyword in ("in ", "for ", "at "):
             idx = lower.find(keyword)
             if idx != -1:
-                candidate = text[idx + len(keyword):].strip().split()[0].rstrip("?.,!")
-                if len(candidate) > 2:
-                    return candidate.title()
+                import re
+                rest = text[idx + len(keyword):].strip()
+                match = re.match(r"([A-Za-z\s]+?)(?:[?.,!]|$)", rest)
+                if match:
+                    candidate = match.group(1).strip()
+                    if len(candidate) > 2:
+                        return candidate.title()
         return None
 
 

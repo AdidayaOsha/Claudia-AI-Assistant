@@ -72,6 +72,20 @@ memory:
   file: "memory.json"
   max_session_history: 50
 
+research:
+  enabled: true
+  max_results: 5                  # top N source snippets passed to LLM
+  max_tokens_per_source: 500      # truncate each result to ~500 tokens (~2000 chars)
+  cache_ttl_seconds: 300          # 5 minutes — repeated queries hit cache, not the web
+  cache_max_size: 128             # max cached queries in memory
+  timeout_seconds: 8              # abort any source that takes longer; use what arrived
+  sources:
+    duckduckgo: true              # free, no API key — always on
+    brave_search: false           # set true + add BRAVE_API_KEY to .env for better results
+    wikipedia: true               # free, no key — good for factual/encyclopedic queries
+    page_scrape: true             # follow top DDG URL and extract full article text
+  safe_search: true
+
 logging:
   level: "INFO"
   dir: "logs"

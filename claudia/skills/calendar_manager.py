@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from skills import Skill
@@ -58,7 +58,7 @@ class CalendarManagerSkill(Skill):
         return self._service
 
     def _list_upcoming(self, service, max_events: int = 5) -> str:
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat()
         result = service.events().list(
             calendarId="primary",
             timeMin=now,

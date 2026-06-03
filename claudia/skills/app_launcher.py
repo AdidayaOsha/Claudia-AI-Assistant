@@ -104,15 +104,14 @@ class AppLauncherSkill(Skill):
     # ------------------------------------------------------------------ #
 
     def _launch(self, executable: str, display_name: str) -> str:
-        """Launch by executable name, URI (e.g. msteams:), or full path."""
+        """Launch by executable name, URI (e.g. msteam:), or full path."""
         try:
             if executable.endswith(":"):
-                # URI protocol handler (e.g. msteams:, ms-teams:)
                 os.startfile(executable)
             elif Path(executable).is_absolute() and Path(executable).exists():
                 os.startfile(executable)
             else:
-                subprocess.Popen(executable, shell=True)
+                os.startfile(executable)
             return f"{display_name.title()} launched."
         except Exception as e:
             logger.error("Launch failed (%s): %s", executable, e)
@@ -127,9 +126,9 @@ class AppLauncherSkill(Skill):
             return f"Couldn't open {url}."
 
     def _shell_start(self, target: str) -> str:
-        """Last resort: hand the name to Windows Shell via `start ""`."""
+        """Last resort: hand the name to Windows Shell via os.startfile."""
         try:
-            subprocess.Popen(f'start "" "{target}"', shell=True)
+            os.startfile(target)
             return f"Opening {target}."
         except Exception as e:
             logger.error("Shell start failed (%s): %s", target, e)

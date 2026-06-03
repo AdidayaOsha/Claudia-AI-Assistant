@@ -69,8 +69,28 @@ class Brain:
         else:
             logger.info("OPENAI_API_KEY not set — OpenAI fallback unavailable")
 
-    def think(self, user_input: str, context: list[dict]) -> str:
+    def think(self, user_input: str, context: list[dict], research_context: str | None = None) -> str:
         messages = self._build_messages(user_input, context)
+
+        # Inject live web data as a context prefix
+        if research_context:
+            from datetime import datetime
+            import pytz
+            jkt = pytz.timezone("Asia/Jakarta")
+            timestamp = datetime.now(jkt).strftime("%Y-%m-%d %H:%M WIB")
+            messages.insert(0, {
+                "role": "user",
+                "content": (
+                    f"[LIVE WEB DATA — fetched {timestamp}]\n"
+                    f"{research_context}\n"
+                    "[END WEB DATA]\n\n"
+                    "Use the above data to answer the following question. "
+                    "Prefer this data over your training knowledge for anything time-sensitive. "
+                    "Cite source URLs only if explicitly asked."
+                ),
+            })
+            messages = self._sanitize_messages(messages, user_input)
+
         self._last_error = ""
 
         if self._anthropic:
@@ -95,8 +115,26 @@ class Brain:
 
         return self._local_fallback(user_input)
 
-    def think_stream(self, user_input: str, context: list[dict]) -> Generator[str, None, None]:
+    def think_stream(self, user_input: str, context: list[dict], research_context: str | None = None) -> Generator[str, None, None]:
         messages = self._build_messages(user_input, context)
+
+        if research_context:
+            from datetime import datetime
+            import pytz
+            jkt = pytz.timezone("Asia/Jakarta")
+            timestamp = datetime.now(jkt).strftime("%Y-%m-%d %H:%M WIB")
+            messages.insert(0, {
+                "role": "user",
+                "content": (
+                    f"[LIVE WEB DATA — fetched {timestamp}]\n"
+                    f"{research_context}\n"
+                    "[END WEB DATA]\n\n"
+                    "Use the above data to answer the following question. "
+                    "Prefer this data over your training knowledge for anything time-sensitive. "
+                    "Cite source URLs only if explicitly asked."
+                ),
+            })
+            messages = self._sanitize_messages(messages, user_input)
         if self._anthropic:
             try:
                 yield from self._stream_anthropic(messages)
@@ -113,8 +151,7 @@ class Brain:
 
         yield self._local_fallback(user_input)
 
-    def reset_context(self) -> None:
-        pass
+
 
     def _build_messages(self, user_input: str, context: list[dict]) -> list[dict]:
         """Build a valid alternating-role message list for the Anthropic API."""
@@ -125,6 +162,8 @@ class Brain:
     def _sanitize_messages(self, messages: list[dict], user_input: str = "") -> list[dict]:
         """Ensure messages alternate roles correctly for the Anthropic API."""
         if not messages:
+            if user_input:
+                return [{"role": "user", "content": user_input}]
             return messages
         sanitized = [messages[0]]
         for msg in messages[1:]:

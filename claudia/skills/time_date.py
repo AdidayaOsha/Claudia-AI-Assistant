@@ -20,9 +20,13 @@ class TimeDateSkill(Skill):
     def execute(self, params: dict) -> str:
         now = self._now()
         user_input = params.get("raw_input", "").lower()
-        if "time" in user_input and "date" not in user_input and "day" not in user_input:
+        wants_time = "time" in user_input
+        wants_date = "date" in user_input or "day" in user_input
+        if wants_time and wants_date:
+            return f"It's {now.strftime('%H:%M')} on {now.strftime('%A, %d %B %Y')} in Jakarta."
+        if wants_time:
             return f"It's {now.strftime('%H:%M')} in Jakarta."
-        if "date" in user_input:
+        if wants_date:
             return f"Today is {now.strftime('%A, %d %B %Y')}."
         return f"It's {now.strftime('%H:%M')} on {now.strftime('%A, %d %B %Y')}."
 

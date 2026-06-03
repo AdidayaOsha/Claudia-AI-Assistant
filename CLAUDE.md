@@ -3,7 +3,7 @@
 > **This file is automatically read by Claude Code at session start.**
 > **Inspired by:** Iron Man's J.A.R.V.I.S. | **Stack:** Python + Anthropic Claude API + OpenAI fallback + SpeechRecognition + ElevenLabs TTS + Flask
 > **Assistant name:** `CLAUDIA` (Claude's nickname — treat this name as canonical throughout all files)
-> **Status:** BUILT AND RUNNING — all 29 files implemented under `claudia/`
+> **Status:** BUILT AND RUNNING — all 30 files implemented under `claudia/`
 
 ---
 
@@ -85,7 +85,8 @@ claudia/
 │   ├── calendar_manager.py    # Google Calendar (gated: enable_calendar)
 │   ├── email_reader.py        # Gmail IMAP (gated: enable_email)
 │   ├── jokes_facts.py         # Curated built-in jokes + facts
-│   └── file_manager.py        # os.walk file search + open
+│   ├── file_manager.py        # os.walk file search + open
+│   └── research.py            # Real-time web research (async multi-source)
 │
 ├── ui/
 │   ├── dashboard.py           # Flask + flask-socketio, /api/stats, user_input event
@@ -125,6 +126,11 @@ pyautogui>=0.9.54
 pytz>=2024.1
 elevenlabs>=2.0
 pygame>=2.6
+httpx>=0.27.0
+beautifulsoup4>=4.12.3
+lxml>=5.2.1
+trafilatura>=1.9.0
+cachetools>=5.3.3
 ```
 
 ---
@@ -138,6 +144,7 @@ OPENWEATHERMAP_API_KEY=   # Weather skill
 NEWSAPI_KEY=              # News briefing skill
 ELEVENLABS_API_KEY=       # TTS voice (primary)
 ELEVENLABS_VOICE_ID=      # ElevenLabs voice ID
+BRAVE_API_KEY=            # Optional — Brave Search API
 GOOGLE_CREDENTIALS_PATH=  # Calendar/Gmail OAuth (credentials.json)
 ```
 
@@ -157,8 +164,8 @@ Key implementation details:
 
 ```python
 class Brain:
-    def think(self, user_input: str, context: list[dict]) -> str: ...
-    def think_stream(self, user_input: str, context: list[dict]) -> Generator[str]: ...
+    def think(self, user_input: str, context: list[dict], research_context: str | None = None) -> str: ...
+    def think_stream(self, user_input: str, context: list[dict], research_context: str | None = None) -> Generator[str]: ...
     def _sanitize_messages(self, messages: list[dict], user_input: str = "") -> list[dict]: ...
 ```
 
@@ -213,6 +220,7 @@ Each skill implements `Skill` from `skills/__init__.py`. Triggers are **specific
 | `email_reader` | "check email", "unread mail", "inbox" | Gmail IMAP (gated) |
 | `jokes_facts` | "tell me a joke", "fun fact", "did you know" | Built-in curated list |
 | `file_manager` | "find file", "open document", "find my file" | os.walk + subprocess |
+| `research` | "search for", "look up", "what's happening", "as of today" | Async: DDG + Wikipedia + Brave + page scrape |
 
 > **IMPORTANT:** Single-word triggers like "time", "find", "open", "news", "interesting" are intentionally avoided — they match too broadly and intercept general conversation meant for the LLM.
 
@@ -272,7 +280,8 @@ Iron Man HUD at `http://localhost:5000`:
 [CLAUDIA] Initializing systems...
 [CLAUDIA] Loading memory... (N entries) [OK]
 [CLAUDIA] Connecting to Anthropic Claude... [OK]
-[CLAUDIA] Skill modules loaded: 10 skills [OK]
+[CLAUDIA] Skill modules loaded: 11 skills [OK]
+[CLAUDIA] Research: DDG [OK] | Wikipedia [OK] | Brave [no key] | Cache TTL=300s [OK]
 [CLAUDIA] Dashboard running at http://127.0.0.1:5000 [OK]
 [CLAUDIA] Microphone calibrated [OK]
 [CLAUDIA] All systems operational.
@@ -310,13 +319,17 @@ Note: Boot uses `[OK]`/`[!!]` (ASCII) not unicode symbols — Windows console co
 - [x] Microphone listening with wake word + 60s conversation mode
 - [x] Dashboard text input working (http://127.0.0.1:5000)
 - [x] General conversation routed to Claude LLM
-- [x] 10 skill modules loaded and operational
+- [x] 11 skill modules loaded and operational
 - [x] Weather working (OpenWeatherMap)
 - [x] Long-term memory persisted to memory.json
 - [x] Goodbye phrases exit conversation mode
 - [ ] Google Calendar / Gmail (requires credentials.json setup)
+- [x] Internet research module — async DDG + Wikipedia + Brave + page scrape
 - [ ] NewsAPI (requires NEWSAPI_KEY)
 
 ---
+
+## 🌐 INTERNET RESEARCH MODULE
+See `docs/internet_research.md` — skill file: `skills/research.py`.
 
 *— `CLAUDE.md` lives at `C:\Projects\Claudia\CLAUDE.md` and is read automatically by Claude Code on every session start.*

@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -7,8 +8,9 @@ logger = logging.getLogger(__name__)
 
 
 class Memory:
-    def __init__(self, memory_file: str = "memory.json"):
+    def __init__(self, memory_file: str = "memory.json", max_session_history: int = 50):
         self.memory_path = Path(memory_file)
+        self.max_session_history = max_session_history
         self.session_history: list[dict] = []
         self.long_term: dict = {
             "user_preferences": {},
@@ -16,6 +18,8 @@ class Memory:
             "notes": [],
             "last_session": "",
         }
+        self._last_save_time: float = 0.0
+        self._save_interval: float = 2.0
         self.load()
 
     def remember(self, key: str, value) -> None:
@@ -39,17 +43,27 @@ class Memory:
 
     def add_to_history(self, role: str, content: str) -> None:
         self.session_history.append({"role": role, "content": content})
+        if len(self.session_history) > self.max_session_history:
+            self.session_history = self.session_history[-self.max_session_history:]
 
     def get_context_window(self, n: int = 10) -> list[dict]:
         return self.session_history[-n:]
 
-    def save(self) -> None:
+    def save(self, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_save_time < self._save_interval:
+            return
+        if not self.memory_path.parent.exists():
+            self.memory_path.parent.mkdir(parents=True, exist_ok=True)
         self.long_term["last_session"] = datetime.now().isoformat()
+        tmp = self.memory_path.with_suffix(".tmp")
         try:
-            self.memory_path.write_text(
+            tmp.write_text(
                 json.dumps(self.long_term, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
+            tmp.replace(self.memory_path)
+            self._last_save_time = now
         except OSError as e:
             logger.error("Failed to save memory: %s", e)
 
@@ -59,6 +73,17 @@ class Memory:
         try:
             data = json.loads(self.memory_path.read_text(encoding="utf-8"))
             self.long_term.update(data)
+            # Validate types — reset any corrupted values to defaults
+            expected = {
+                "user_preferences": {},
+                "frequent_commands": {},
+                "notes": [],
+                "last_session": "",
+            }
+            for key, default in expected.items():
+                if not isinstance(self.long_term.get(key), type(default)):
+                    logger.warning("Memory entry '%s' has wrong type — resetting", key)
+                    self.long_term[key] = default
             logger.info("Memory loaded: %d entries", len(self.long_term.get("user_preferences", {})))
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Could not load memory file: %s", e)

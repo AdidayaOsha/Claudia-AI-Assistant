@@ -71,9 +71,9 @@ class SystemControlSkill(Skill):
                 return "Volume decreased."
             level = self._extract_number(raw)
             if level is not None:
-                # Windows: use nircmd if available, else VK_VOLUME_UP/DOWN approximation
-                self._set_volume_nircmd(level)
-                return f"Volume set to {level}%."
+                if self._set_volume_nircmd(level):
+                    return f"Volume set to {level}%."
+                return "Volume control unavailable. Install nircmd or adjust manually."
             return "Say 'volume up', 'volume down', or 'volume 50'."
         except Exception as e:
             logger.error("Volume control error: %s", e)
@@ -97,9 +97,10 @@ class SystemControlSkill(Skill):
             logger.error("Unmute error: %s", e)
             return "Unmute failed."
 
-    def _set_volume_nircmd(self, level: int) -> None:
+    def _set_volume_nircmd(self, level: int) -> bool:
         val = int(level / 100 * 65535)
-        subprocess.run(["nircmd", "setsysvolume", str(val)], check=False)
+        result = subprocess.run(["nircmd", "setsysvolume", str(val)], capture_output=True, check=False)
+        return result.returncode == 0
 
     def _extract_number(self, text: str) -> int | None:
         import re

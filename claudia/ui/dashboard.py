@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from flask_socketio import SocketIO
 logger = logging.getLogger(__name__)
 
 _socketio: SocketIO | None = None
+_ = psutil.cpu_percent(interval=None)  # prime the delta counter
 
 
 def create_app(config: dict) -> tuple[Flask, SocketIO]:
@@ -20,7 +22,7 @@ def create_app(config: dict) -> tuple[Flask, SocketIO]:
         template_folder=str(template_dir),
         static_folder=str(static_dir),
     )
-    app.config["SECRET_KEY"] = "claudia-dashboard-secret"
+    app.config["SECRET_KEY"] = secrets.token_hex(16)
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
     _socketio = socketio
 
@@ -35,7 +37,7 @@ def create_app(config: dict) -> tuple[Flask, SocketIO]:
         hours, remainder = divmod(uptime_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         return jsonify({
-            "cpu_percent": psutil.cpu_percent(interval=0.1),
+            "cpu_percent": psutil.cpu_percent(interval=None),
             "ram_percent": psutil.virtual_memory().percent,
             "uptime": f"{hours:02d}:{minutes:02d}:{seconds:02d}",
             "timestamp": datetime.now().isoformat(),
@@ -52,10 +54,8 @@ def create_app(config: dict) -> tuple[Flask, SocketIO]:
 
     @socketio.on("user_input")
     def on_user_input(data):
-        """Allow sending commands from the dashboard UI."""
-        text = data.get("text", "").strip()
-        if text:
-            socketio.emit("transcript", {"role": "user", "text": text})
+        """Transcript emission is handled by the assistant to avoid duplicates."""
+        pass
 
     return app, socketio
 

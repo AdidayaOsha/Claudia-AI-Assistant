@@ -36,6 +36,8 @@ class Assistant:
         self._enable_reflection: bool = mem_cfg.get("enable_reflection", True)
         self._min_turns_for_reflection: int = mem_cfg.get("min_turns_for_reflection", 4)
 
+        # Skills must load before Brain so research_fn can be injected
+        self.skills = load_all_skills(config)
         research_skill = next((s for s in self.skills if s.name == "research"), None)
         research_fn = (
             (lambda q: research_skill.execute({"query": q, "raw_input": q}))
@@ -44,7 +46,6 @@ class Assistant:
         self.brain = Brain(config, research_fn=research_fn)
         self.listener = Listener(config)
         self.speaker = Speaker(config)
-        self.skills = load_all_skills(config)
         self.router = IntentRouter(self.skills, config)
         self._research_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="research"

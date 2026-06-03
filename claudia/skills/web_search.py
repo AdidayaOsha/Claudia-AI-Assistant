@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 class WebSearchSkill(Skill):
     name = "web_search"
-    triggers = ["search for", "look up", "google", "look for", "search the web", "search online", "find information", "find out about"]
+    triggers = ["google", "look for", "search the web", "search online", "find information", "find out about"]
     description = "Searches the web using DuckDuckGo and returns a summary of top results."
 
     def __init__(self, config: dict):
@@ -18,7 +18,7 @@ class WebSearchSkill(Skill):
         if not query:
             return "What would you like me to search for?"
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=self.max_results))
             if not results:

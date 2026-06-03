@@ -19,6 +19,7 @@ _cache: TTLCache = TTLCache(maxsize=128, ttl=300)
 
 class ResearchOrchestrator(Skill):
     name = "research"
+    research_output = True
     triggers = [
         "search for", "look up", "find information about",
         "find info about", "what's happening", "what is happening",
@@ -145,7 +146,7 @@ class ResearchOrchestrator(Skill):
 
     async def _fetch_ddg(self, query: str) -> list[dict]:
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
             loop = asyncio.get_event_loop()
 
             def _search():

@@ -10,6 +10,7 @@ class Skill:
     name: str = ""
     triggers: list[str] = []
     description: str = ""
+    research_output: bool = False  # True → result injected into LLM as context, not spoken directly
 
     def can_handle(self, intent: str) -> bool:
         return any(t.lower() in intent.lower() for t in self.triggers)

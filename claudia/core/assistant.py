@@ -165,22 +165,23 @@ class Assistant:
         return self.brain.think(user_input, context)
 
     def _process_skill(self, skill, params, user_input, context):
-        """Execute a skill, handling research specially (context injection vs spoken response)."""
+        """Execute a skill; skills with research_output=True inject results into the LLM."""
         self._emit("skill_active", {"skill": skill.name})
+        is_research = getattr(skill, "research_output", False)
         try:
-            if skill.name == "research":
+            if is_research:
                 future = self._research_executor.submit(skill.execute, params)
                 result = future.result(timeout=30)
             else:
                 result = skill.execute(params)
         except concurrent.futures.TimeoutError:
-            logger.error("Research timed out after 30s")
+            logger.error("Skill '%s' timed out after 30s", skill.name)
             return "I wasn't able to pull live data on that."
         except Exception as e:
             logger.error("Skill '%s' failed: %s", skill.name, e)
             return f"I ran into an issue with {skill.name}. Standing by."
 
-        if skill.name == "research" and result:
+        if is_research and result:
             return self.brain.think(
                 user_input=user_input,
                 context=context or [],

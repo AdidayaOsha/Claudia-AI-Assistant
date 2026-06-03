@@ -134,6 +134,17 @@ class Assistant:
                 )
                 self.memory.add_to_history("user", user_input)
 
+                # Memory correction — intercept before normal routing
+                correction = self._handle_memory_correction(user_input)
+                if correction:
+                    logger.info("[CLAUDIA] %s", correction)
+                    self._emit("transcript", {"role": "assistant", "text": correction})
+                    self.memory.add_to_history("user", user_input)
+                    self.memory.add_to_history("assistant", correction)
+                    self.speaker.speak(correction)
+                    self.listener.enter_conversation_mode()
+                    continue
+
                 response = self._process(user_input, context_snapshot)
 
                 logger.info("[CLAUDIA] %s", response)
@@ -141,10 +152,10 @@ class Assistant:
                 self.memory.add_to_history("assistant", response)
                 self.memory.increment_command((user_input.split() or ["unknown"])[0])
 
-                # Background: extract personal facts from this exchange
+                # Background: extract explicit personal facts from user input only
                 if self._enable_fact_extraction:
                     self._memory_executor.submit(
-                        self._extract_and_save_facts, user_input, response
+                        self._extract_and_save_facts, user_input
                     )
 
                 self.speaker.speak(response)
@@ -217,17 +228,60 @@ class Assistant:
     #  Memory helpers                                                      #
     # ------------------------------------------------------------------ #
 
-    def _extract_and_save_facts(self, user_input: str, response: str) -> None:
-        """Background worker — extract personal facts and persist them."""
+    def _extract_and_save_facts(self, user_input: str) -> None:
+        """Background worker — extract explicit personal facts from user input only."""
         try:
             existing = self.memory.long_term.get("user_preferences", {})
-            facts = self.brain.extract_facts(user_input, response, existing)
+            facts = self.brain.extract_facts(user_input, existing)
             for key, value in facts.items():
                 if key and value is not None:
                     self.memory.save_fact(key, str(value))
                     logger.info("Fact learned: %s = %s", key, value)
         except Exception as e:
             logger.debug("Fact extraction worker failed: %s", e)
+
+    def _handle_memory_correction(self, user_input: str) -> str | None:
+        """If the user is correcting memory, remove the relevant fact and confirm.
+        Returns a response string if handled, None otherwise."""
+        lower = user_input.lower()
+        correction_phrases = [
+            "forget that", "that's wrong", "that is wrong", "remove from memory",
+            "correct that", "delete that fact", "remove that", "erase that",
+            "forget my", "remove my", "delete my", "that's not right", "that is not right",
+        ]
+        if not any(p in lower for p in correction_phrases):
+            return None
+
+        prefs = self.memory.long_term.get("user_preferences", {})
+        if not prefs:
+            return "Nothing stored to remove."
+
+        # Ask the LLM which key to remove based on the user's phrasing
+        facts_list = "\n".join(f"  {k}: {v}" for k, v in prefs.items())
+        prompt = (
+            f"The user said: \"{user_input}\"\n\n"
+            f"Stored facts:\n{facts_list}\n\n"
+            "Which key should be removed? Reply with ONLY the exact key name, or 'none' if unclear."
+        )
+        try:
+            result = self.brain._anthropic.messages.create(
+                model=self.brain.primary_model,
+                max_tokens=30,
+                system="You identify which memory key to delete. Reply with the exact key name only.",
+                messages=[{"role": "user", "content": prompt}],
+            ) if self.brain._anthropic else None
+
+            key = result.content[0].text.strip().strip('"') if result else "none"
+
+            if key and key != "none" and key in prefs:
+                del prefs[key]
+                self.memory.save(force=True)
+                logger.info("Fact removed from memory: %s", key)
+                return f"Done. {key.replace('_', ' ').capitalize()} is off the record."
+            return "I'm not sure which fact you want removed. Be more specific."
+        except Exception as e:
+            logger.debug("Memory correction failed: %s", e)
+            return None
 
     def _run_reflection(self) -> None:
         """Synchronously summarise the current session and persist it."""

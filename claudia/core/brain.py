@@ -287,18 +287,20 @@ class Brain:
     def extract_facts(
         self,
         user_input: str,
-        response: str,
         existing_facts: dict,
     ) -> dict:
         if not self._anthropic:
             return {}
         prompt = (
-            "Extract any personal facts, preferences, or important information the user revealed.\n"
-            "Return ONLY a JSON object like {\"key\": \"value\"} or {} if nothing notable.\n"
-            "Keys must be short snake_case labels. Max 3 facts. Do not re-extract known facts.\n\n"
-            f"User said: \"{user_input[:300]}\"\n"
-            f"Assistant replied: \"{response[:200]}\"\n"
-            f"Already known: {json.dumps(existing_facts)[:400]}"
+            "Extract ONLY facts the user explicitly stated about themselves in first person.\n"
+            "Look for clear statements like 'I am', 'my name is', 'I live in', 'I prefer', "
+            "'I like', 'I work at', 'I wake up at', 'my wife/husband/partner is'.\n"
+            "Do NOT infer, guess, or extract anything not directly stated by the user.\n"
+            "Do NOT extract facts already known.\n"
+            "Return ONLY a JSON object {\"key\": \"value\"} or {} if nothing qualifies.\n"
+            "Keys: short snake_case labels. Max 2 facts per call.\n\n"
+            f"User said: \"{user_input[:400]}\"\n"
+            f"Already known: {json.dumps(existing_facts)[:300]}"
         )
         try:
             result = self._anthropic.messages.create(

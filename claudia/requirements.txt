@@ -34,6 +34,9 @@ pytz>=2024.1
 elevenlabs>=2.0
 pygame>=2.6
 
+# Local LLM backend requires Ollama running separately — https://ollama.com
+# Not a pip package. Install Ollama, then: ollama pull qwen2.5:7b-instruct
+
 # Optional / premium (uncomment to enable)
 # openai-whisper              # offline STT
 # pvporcupine                 # hardware wake word

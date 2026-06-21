@@ -24,6 +24,7 @@ APP_MAP: dict[str, str] = {
     "outlook": "outlook",
     "explorer": "explorer",
     "file explorer": "explorer",
+    "files": "explorer",
     "terminal": "wt",
     "windows terminal": "wt",
     "powershell": "powershell",
@@ -41,6 +42,15 @@ APP_MAP: dict[str, str] = {
     "snipping tool": "snippingtool",
 }
 
+# App name → list of Windows process image names to kill (ordered by likelihood)
+CLOSE_MAP: dict[str, list[str]] = {
+    "teams": ["ms-teams.exe", "Teams.exe"],
+    "microsoft teams": ["ms-teams.exe", "Teams.exe"],
+    "service studio": ["ServiceStudio.exe"],
+    "service studio 11": ["ServiceStudio.exe"],
+    "outsystems": ["ServiceStudio.exe"],
+}
+
 BROWSER_SEARCH_KEYWORDS = (
     "browse to",
     "open browser and search",
@@ -50,20 +60,32 @@ BROWSER_SEARCH_KEYWORDS = (
     "google search for",
 )
 
+# Keywords that indicate a "close/quit" command rather than "open/launch"
+CLOSE_KEYWORDS = ("close ", "quit ", "kill ", "terminate ", "shut down ")
+
 
 class AppLauncherSkill(Skill):
     name = "app_launcher"
     triggers = [
+        # Open / launch
         "open app", "open chrome", "open firefox", "open edge", "open notepad",
         "open spotify", "open discord", "launch app", "launch chrome", "start app",
         "open powershell", "open cmd", "open terminal", "open command prompt",
         "open teams", "open microsoft teams", "open service studio", "open outsystems",
         "open the app", "open the browser", "browse to", "open browser",
+        "open my browser", "open default browser",
         "open word", "open excel", "open outlook", "open vs code", "open vscode",
         "open paint", "open task manager", "launch teams", "launch service studio",
         "start powershell", "start cmd", "start terminal",
+        "open file explorer", "open my file explorer", "open explorer",
+        "open my files", "open files",
+        # Close / quit
+        "close teams", "close microsoft teams",
+        "close service studio", "close service studio 11", "close outsystems",
+        "quit teams", "quit service studio",
+        "kill teams", "kill service studio",
     ]
-    description = "Opens applications, URLs, and browser searches on Windows."
+    description = "Opens and closes applications, URLs, and browser searches on Windows."
 
     def __init__(self, config: dict):
         # User-defined apps from config.yaml — takes priority over built-in APP_MAP
@@ -73,8 +95,13 @@ class AppLauncherSkill(Skill):
 
     def execute(self, params: dict) -> str:
         raw = params.get("raw_input", "")
+        lower = raw.lower()
 
-        # Browser search check first (before target extraction)
+        # Close command — must check before open logic
+        if self._is_close_command(lower):
+            return self._handle_close(lower)
+
+        # Browser search (e.g. "browse to X", "search in browser for X")
         if self._is_browser_search(raw):
             return self._browser_search(raw)
 
@@ -82,11 +109,20 @@ class AppLauncherSkill(Skill):
         if not target:
             return "What would you like me to open?"
 
+        # Normalise "my X" → "X" (handles "open my browser", "open my files", etc.)
+        target_key = target.lower()
+        if target_key.startswith("my "):
+            target_key = target_key[3:]
+        if target_key.startswith("the "):
+            target_key = target_key[4:]
+
+        # Default browser
+        if target_key in ("browser", "web browser", "default browser", "internet"):
+            return self._open_default_browser()
+
         # Direct URL
         if target.startswith(("http://", "https://", "www.")):
             return self._open_url(target)
-
-        target_key = target.lower()
 
         # User-configured apps (config.yaml) — highest priority
         if target_key in self._user_apps:
@@ -96,15 +132,65 @@ class AppLauncherSkill(Skill):
         if target_key in APP_MAP:
             return self._launch(APP_MAP[target_key], target)
 
-        # Windows shell fallback: `start ""` lets Windows find the app via Start Menu / PATH
+        # Windows shell fallback: lets Windows find the app via Start Menu / PATH
         return self._shell_start(target)
 
     # ------------------------------------------------------------------ #
-    #  Launch helpers                                                       #
+    #  Close helpers                                                        #
     # ------------------------------------------------------------------ #
 
+    def _is_close_command(self, lower: str) -> bool:
+        return any(kw in lower for kw in CLOSE_KEYWORDS)
+
+    def _handle_close(self, lower: str) -> str:
+        # Match against CLOSE_MAP keys (longest match first to avoid partial hits)
+        for app_key in sorted(CLOSE_MAP, key=len, reverse=True):
+            if app_key in lower:
+                return self._kill_processes(CLOSE_MAP[app_key], app_key)
+
+        # User-configured apps — check if any name appears after the close keyword
+        for name in sorted(self._user_apps, key=len, reverse=True):
+            if name in lower:
+                # Best-effort: derive exe name from the config path
+                exe = Path(self._user_apps[name]).name
+                return self._kill_processes([exe], name)
+
+        return "I'm not sure what to close. Try 'close teams' or 'close service studio'."
+
+    def _kill_processes(self, processes: list[str], display_name: str) -> str:
+        killed = False
+        for proc in processes:
+            try:
+                result = subprocess.run(
+                    ["taskkill", "/F", "/IM", proc],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    killed = True
+                    logger.info("Killed process: %s", proc)
+                else:
+                    logger.debug("taskkill %s: %s", proc, result.stderr.strip())
+            except Exception as e:
+                logger.error("taskkill failed for %s: %s", proc, e)
+        if killed:
+            return f"{display_name.title()} closed."
+        return f"{display_name.title()} doesn't appear to be running."
+
+    # ------------------------------------------------------------------ #
+    #  Open / launch helpers                                               #
+    # ------------------------------------------------------------------ #
+
+    def _open_default_browser(self) -> str:
+        try:
+            webbrowser.open_new("about:blank")
+            return "Browser opened."
+        except Exception as e:
+            logger.error("Default browser open failed: %s", e)
+            return "Couldn't open the browser."
+
     def _launch(self, executable: str, display_name: str) -> str:
-        """Launch by executable name, URI (e.g. msteam:), or full path."""
+        """Launch by executable name, URI (e.g. msteams:), or full path."""
         try:
             if executable.endswith(":"):
                 os.startfile(executable)
@@ -158,7 +244,6 @@ class AppLauncherSkill(Skill):
         for kw in sorted(BROWSER_SEARCH_KEYWORDS, key=len, reverse=True):
             if kw in lower:
                 idx = lower.index(kw) + len(kw)
-                # strip filler words like "for", "about"
                 remainder = text[idx:].strip()
                 for filler in ("for ", "about "):
                     if remainder.lower().startswith(filler):
@@ -182,5 +267,9 @@ class AppLauncherSkill(Skill):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     skill = AppLauncherSkill({})
-    print(skill.execute({"raw_input": "open notepad"}))
-    print(skill.execute({"raw_input": "browse to latest Python news"}))
+    print(skill.execute({"raw_input": "open browser"}))
+    print(skill.execute({"raw_input": "open my browser"}))
+    print(skill.execute({"raw_input": "open file explorer"}))
+    print(skill.execute({"raw_input": "open my file explorer"}))
+    print(skill.execute({"raw_input": "close teams"}))
+    print(skill.execute({"raw_input": "close service studio"}))

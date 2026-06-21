@@ -124,6 +124,18 @@ def main() -> None:
     from core.assistant import Assistant
     assistant = Assistant(config)
 
+    # Brain backend status
+    brain_cfg = config.get("brain", {})
+    active = brain_cfg.get("active_provider", "claude")
+    claude_ok = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    local_ok = assistant.brain._local_backend.is_available()
+    logger.info(
+        "[CLAUDIA] Brain backend: %s active | Claude %s | Local/Ollama %s",
+        active.upper(),
+        "[OK]" if claude_ok else "[no key]",
+        "[OK]" if local_ok else "[unreachable]",
+    )
+
     # Wire dashboard socket emit + incoming text commands to assistant
     try:
         from ui.dashboard import get_socketio

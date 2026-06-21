@@ -1,7 +1,26 @@
-import json
+"""
+core/brain.py — Provider-agnostic dispatcher.
+
+Holds one active BrainBackend at a time and delegates think()/think_stream()
+to it. Switching providers is just swapping which backend instance is active —
+no restart, no reload of conversation history.
+
+Public interface is unchanged from the single-provider implementation:
+  brain.think(user_input, context, research_context, memory_context)
+  brain.think_stream(...)
+  brain.extract_facts(...)
+  brain.reflect(...)
+"""
+
+from __future__ import annotations
+
 import logging
-import time
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Generator
+
+from core.backends.base import BrainBackend
+from core.backends.claude_backend import ClaudeBackend
+from core.backends.local_backend import LocalBackend
 
 logger = logging.getLogger(__name__)
 
@@ -36,74 +55,66 @@ you need current data, are uncertain about a time-sensitive fact, or the user \
 challenges your knowledge. No trigger phrases required. When pre-fetched data \
 appears as [LIVE WEB DATA], prefer it over training knowledge."""
 
-# Tool schema exposed to Claude — enables autonomous web search decisions
-RESEARCH_TOOL = {
-    "name": "web_research",
-    "description": (
-        "Search the internet for real-time information. Use when:\n"
-        "- The topic requires data from after your training cutoff\n"
-        "- The user asks about current events, live scores, recent news, or prices\n"
-        "- You are uncertain about a time-sensitive fact\n"
-        "- The user challenges your knowledge and you need to verify\n"
-        "- Answering well requires up-to-date facts\n"
-        "Do NOT use for general knowledge you can answer confidently from training."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Precise search query"},
-        },
-        "required": ["query"],
-    },
-}
-
 
 class Brain:
-    def __init__(self, config: dict, research_fn: Callable[[str], str] | None = None):
+    def __init__(self, config: dict, research_fn: Callable[[str], str] | None = None, searching_callback: Callable[[], None] | None = None):
         self.config = config
         self.llm_config = config.get("llm", {})
         self.context_window = self.llm_config.get("context_window", 10)
-        self.max_retries = self.llm_config.get("max_retries", 3)
-        self.primary_model = self.llm_config.get("primary_model", "claude-sonnet-4-6")
-        self.fallback_model = self.llm_config.get("fallback_model", "gpt-4o")
-        self._anthropic = None
-        self._openai = None
-        self._last_error: str = ""
-        self._research_fn = research_fn  # injected by assistant; callable(query) -> str
-        self._init_clients()
 
-    def _init_clients(self) -> None:
-        import os
-        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if anthropic_key:
-            try:
-                import anthropic
-                self._anthropic = anthropic.Anthropic(api_key=anthropic_key)
-                logger.info("Anthropic client initialized")
-            except Exception as e:
-                logger.error("Anthropic client init failed: %s", e, exc_info=True)
-        else:
-            logger.warning("ANTHROPIC_API_KEY not set — Anthropic unavailable")
+        self._claude_backend = ClaudeBackend(config, research_fn=research_fn, searching_callback=searching_callback)
+        self._local_backend = LocalBackend(config)
+        self._backends: dict[str, BrainBackend] = {
+            "claude": self._claude_backend,
+            "local": self._local_backend,
+        }
 
-        openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if openai_key:
-            try:
-                import openai
-                self._openai = openai.OpenAI(api_key=openai_key)
-                logger.info("OpenAI fallback client initialized")
-            except Exception as e:
-                logger.error("OpenAI client init failed: %s", e, exc_info=True)
-        else:
-            logger.info("OPENAI_API_KEY not set — OpenAI fallback unavailable")
+        self.active_provider: str = (
+            config.get("brain", {}).get("active_provider", "claude")
+        )
+        logger.info("Brain initialised. Active provider: %s", self.active_provider)
 
     # ------------------------------------------------------------------ #
-    #  System prompt                                                       #
+    #  Backward-compat properties (used by assistant._handle_memory_correction)
     # ------------------------------------------------------------------ #
 
-    def _build_system_prompt(self, memory_context: str | None = None) -> str:
-        if memory_context:
-            return SYSTEM_PROMPT + "\n\n" + memory_context
-        return SYSTEM_PROMPT
+    @property
+    def _anthropic(self):
+        return self._claude_backend._anthropic
+
+    @property
+    def primary_model(self) -> str:
+        return self._claude_backend.primary_model
+
+    @property
+    def active_backend(self) -> BrainBackend:
+        return self._backends[self.active_provider]
+
+    # ------------------------------------------------------------------ #
+    #  Provider switching                                                  #
+    # ------------------------------------------------------------------ #
+
+    def switch_provider(self, provider: str) -> str:
+        """
+        Called by assistant._check_provider_switch(). Returns a short spoken
+        confirmation. Does NOT touch conversation history — memory is
+        provider-agnostic, so switching mid-session keeps full context.
+        """
+        if provider not in self._backends:
+            return f"Unknown provider '{provider}'. Use 'claude' or 'local'."
+
+        backend = self._backends[provider]
+        if not backend.is_available():
+            return (
+                f"Can't switch to {provider} — it's not reachable right now. "
+                f"Staying on {self.active_provider}."
+            )
+
+        self.active_provider = provider
+        logger.info("Provider switched to: %s", provider)
+        if provider == "local":
+            return f"Switched to local model ({self._local_backend.model})."
+        return "Switched to Claude."
 
     # ------------------------------------------------------------------ #
     #  Primary inference                                                   #
@@ -116,53 +127,12 @@ class Brain:
         research_context: str | None = None,
         memory_context: str | None = None,
     ) -> str:
-        messages = self._build_messages(user_input, context)
-        system = self._build_system_prompt(memory_context)
-
-        # Pre-fetched research context (from movies/research_output skills — inject directly)
-        if research_context:
-            from datetime import datetime
-            import pytz
-            jkt = pytz.timezone("Asia/Jakarta")
-            timestamp = datetime.now(jkt).strftime("%Y-%m-%d %H:%M WIB")
-            messages.insert(0, {
-                "role": "user",
-                "content": (
-                    f"[LIVE WEB DATA — fetched {timestamp}]\n"
-                    f"{research_context}\n"
-                    "[END WEB DATA]\n\n"
-                    "Use the above data to answer the following question. "
-                    "Prefer this data over your training knowledge for anything time-sensitive. "
-                    "Cite source URLs only if explicitly asked."
-                ),
-            })
-            messages = self._sanitize_messages(messages, user_input)
-
-        self._last_error = ""
-
-        if self._anthropic:
-            for attempt in range(self.max_retries):
-                try:
-                    if research_context or not self._research_fn:
-                        return self._think_anthropic(messages, system)
-                    return self._think_with_tools(messages, system)
-                except Exception as e:
-                    self._last_error = str(e)
-                    logger.error("Anthropic attempt %d failed: %s", attempt + 1, e, exc_info=True)
-                    if attempt < self.max_retries - 1:
-                        time.sleep(2 ** attempt)
-
-        if self._openai:
-            for attempt in range(self.max_retries):
-                try:
-                    return self._think_openai(messages, system)
-                except Exception as e:
-                    self._last_error = str(e)
-                    logger.error("OpenAI attempt %d failed: %s", attempt + 1, e, exc_info=True)
-                    if attempt < self.max_retries - 1:
-                        time.sleep(2 ** attempt)
-
-        return self._local_fallback(user_input)
+        messages = self._build_messages(user_input, context, research_context, memory_context)
+        try:
+            return self.active_backend.think(messages)
+        except RuntimeError as e:
+            logger.error("%s backend failed: %s", self.active_provider, e, exc_info=True)
+            return self._backend_error_response(user_input, str(e))
 
     def think_stream(
         self,
@@ -171,15 +141,58 @@ class Brain:
         research_context: str | None = None,
         memory_context: str | None = None,
     ) -> Generator[str, None, None]:
-        messages = self._build_messages(user_input, context)
+        messages = self._build_messages(user_input, context, research_context, memory_context)
+        try:
+            yield from self.active_backend.think_stream(messages)
+        except RuntimeError as e:
+            logger.error(
+                "%s backend streaming failed: %s", self.active_provider, e, exc_info=True
+            )
+            yield self._backend_error_response(user_input, str(e))
+
+    # ------------------------------------------------------------------ #
+    #  Memory helpers — always use ClaudeBackend regardless of active provider
+    # ------------------------------------------------------------------ #
+
+    def extract_facts(self, user_input: str, existing_facts: dict) -> dict:
+        return self._claude_backend.extract_facts(user_input, existing_facts)
+
+    def reflect(self, session_history: list[dict]) -> str:
+        return self._claude_backend.reflect(session_history)
+
+    # ------------------------------------------------------------------ #
+    #  Internal helpers                                                    #
+    # ------------------------------------------------------------------ #
+
+    def _build_messages(
+        self,
+        user_input: str,
+        context: list[dict],
+        research_context: str | None,
+        memory_context: str | None,
+    ) -> list[dict]:
+        """
+        Builds the full messages list passed to the active backend:
+          [system, ...context_window..., (research_block,) user_input]
+
+        System prompt and optional memory context are merged into the system
+        message. Research injection (from pre-fetched skill results) appears
+        immediately before user_input — both have role "user", so
+        _sanitize_messages merges them into one message, which is the correct
+        semantic: the research is part of the current question's context.
+
+        Per-backend trimming (LocalBackend._budget_context) happens AFTER
+        this inside the backend itself, not here.
+        """
         system = self._build_system_prompt(memory_context)
+        messages: list[dict] = [{"role": "system", "content": system}]
+        messages.extend(list(context[-self.context_window:]))
 
         if research_context:
-            from datetime import datetime
             import pytz
             jkt = pytz.timezone("Asia/Jakarta")
             timestamp = datetime.now(jkt).strftime("%Y-%m-%d %H:%M WIB")
-            messages.insert(0, {
+            messages.append({
                 "role": "user",
                 "content": (
                     f"[LIVE WEB DATA — fetched {timestamp}]\n"
@@ -190,239 +203,53 @@ class Brain:
                     "Cite source URLs only if explicitly asked."
                 ),
             })
-            messages = self._sanitize_messages(messages, user_input)
 
-        if self._anthropic:
-            try:
-                yield from self._stream_anthropic(messages, system)
-                return
-            except Exception as e:
-                logger.error("Anthropic streaming failed: %s", e, exc_info=True)
+        messages.append({"role": "user", "content": user_input})
+        return self._sanitize_messages(messages)
 
-        if self._openai:
-            try:
-                yield from self._stream_openai(messages, system)
-                return
-            except Exception as e:
-                logger.error("OpenAI streaming failed: %s", e, exc_info=True)
+    def _build_system_prompt(self, memory_context: str | None = None) -> str:
+        if memory_context:
+            return SYSTEM_PROMPT + "\n\n" + memory_context
+        return SYSTEM_PROMPT
 
-        yield self._local_fallback(user_input)
-
-    # ------------------------------------------------------------------ #
-    #  Tool-use loop (autonomous web research)                            #
-    # ------------------------------------------------------------------ #
-
-    def _serialize_content(self, content) -> list[dict]:
-        """Convert Anthropic SDK content blocks to plain dicts for re-use in messages."""
-        out = []
-        for block in content:
-            if block.type == "text":
-                out.append({"type": "text", "text": block.text})
-            elif block.type == "tool_use":
-                out.append({
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input,
-                })
-        return out
-
-    def _think_with_tools(self, messages: list[dict], system: str) -> str:
-        current_messages = list(messages)
-
-        for iteration in range(5):
-            response = self._anthropic.messages.create(
-                model=self.primary_model,
-                max_tokens=1024,
-                system=system,
-                tools=[RESEARCH_TOOL],
-                tool_choice={"type": "auto"},
-                messages=current_messages,
-            )
-
-            if response.stop_reason == "tool_use":
-                tool_block = next(
-                    (b for b in response.content if b.type == "tool_use"), None
-                )
-                if tool_block is None:
-                    break
-
-                query = tool_block.input.get("query", "")
-                logger.info("Tool call: web_research(query=%r)", query)
-
-                try:
-                    result = self._research_fn(query)
-                except Exception as e:
-                    logger.warning("Research tool error: %s", e)
-                    result = f"Search failed: {e}"
-
-                # Append assistant tool_use turn + tool result turn
-                current_messages.append({
-                    "role": "assistant",
-                    "content": self._serialize_content(response.content),
-                })
-                current_messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": result or "No results found.",
-                        }
-                    ],
-                })
-            else:
-                # end_turn — gather all text blocks and return
-                return "".join(
-                    b.text for b in response.content
-                    if hasattr(b, "text") and b.text
-                )
-
-        return "I searched but couldn't complete the response. Please try again."
-
-    # ------------------------------------------------------------------ #
-    #  Memory helpers — called from assistant background threads          #
-    # ------------------------------------------------------------------ #
-
-    def extract_facts(
-        self,
-        user_input: str,
-        existing_facts: dict,
-    ) -> dict:
-        if not self._anthropic:
-            return {}
-        prompt = (
-            "Extract ONLY facts the user explicitly stated about themselves in first person.\n"
-            "Look for clear statements like 'I am', 'my name is', 'I live in', 'I prefer', "
-            "'I like', 'I work at', 'I wake up at', 'my wife/husband/partner is'.\n"
-            "Do NOT infer, guess, or extract anything not directly stated by the user.\n"
-            "Do NOT extract facts already known.\n"
-            "Return ONLY a JSON object {\"key\": \"value\"} or {} if nothing qualifies.\n"
-            "Keys: short snake_case labels. Max 2 facts per call.\n\n"
-            f"User said: \"{user_input[:400]}\"\n"
-            f"Already known: {json.dumps(existing_facts)[:300]}"
-        )
-        try:
-            result = self._anthropic.messages.create(
-                model=self.primary_model,
-                max_tokens=120,
-                system="You are a fact extractor. Return ONLY valid JSON, nothing else. No markdown.",
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = result.content[0].text.strip()
-            parsed = json.loads(text)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception as e:
-            logger.debug("Fact extraction failed: %s", e)
-            return {}
-
-    def reflect(self, session_history: list[dict]) -> str:
-        if not self._anthropic or not session_history:
-            return ""
-        turns = session_history[-20:]
-        dialogue = "\n".join(
-            f"{m['role'].upper()}: {m['content'][:120]}" for m in turns
-        )
-        try:
-            result = self._anthropic.messages.create(
-                model=self.primary_model,
-                max_tokens=60,
-                system=(
-                    "Summarise this conversation in ONE sentence, max 20 words. "
-                    "Focus on what was done or discussed. Be specific. No filler."
-                ),
-                messages=[{"role": "user", "content": dialogue}],
-            )
-            return result.content[0].text.strip()
-        except Exception as e:
-            logger.debug("Reflection failed: %s", e)
-            return ""
-
-    # ------------------------------------------------------------------ #
-    #  Internal helpers                                                    #
-    # ------------------------------------------------------------------ #
-
-    def _build_messages(self, user_input: str, context: list[dict]) -> list[dict]:
-        raw = list(context[-self.context_window:])
-        raw.append({"role": "user", "content": user_input})
-        return self._sanitize_messages(raw, user_input)
-
-    def _sanitize_messages(self, messages: list[dict], user_input: str = "") -> list[dict]:
+    def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
+        """
+        Merge consecutive same-role messages (Anthropic rejects adjacent
+        same-role turns). System message at index 0 is always preserved as-is
+        since backends extract it separately before sending to their APIs.
+        """
         if not messages:
-            if user_input:
-                return [{"role": "user", "content": user_input}]
             return messages
         sanitized = [messages[0]]
         for msg in messages[1:]:
-            if msg["role"] != sanitized[-1]["role"]:
+            last = sanitized[-1]
+            if msg["role"] != last["role"]:
                 sanitized.append(msg)
-            else:
+            elif isinstance(last["content"], str) and isinstance(msg["content"], str):
                 sanitized[-1] = {
-                    "role": msg["role"],
-                    "content": sanitized[-1]["content"] + "\n" + msg["content"],
+                    "role": last["role"],
+                    "content": last["content"] + "\n" + msg["content"],
                 }
-        if sanitized and sanitized[-1]["role"] != "user":
-            sanitized.append({"role": "user", "content": user_input})
+            else:
+                # Non-string content (e.g. tool_result blocks) — don't merge
+                sanitized.append(msg)
         return sanitized
 
-    def _think_anthropic(self, messages: list[dict], system: str) -> str:
-        logger.debug("Sending %d messages to Anthropic", len(messages))
-        response = self._anthropic.messages.create(
-            model=self.primary_model,
-            max_tokens=1024,
-            system=system,
-            messages=messages,
-        )
-        return response.content[0].text
-
-    def _think_openai(self, messages: list[dict], system: str) -> str:
-        full_messages = [{"role": "system", "content": system}] + messages
-        response = self._openai.chat.completions.create(
-            model=self.fallback_model,
-            messages=full_messages,
-            max_tokens=1024,
-        )
-        return response.choices[0].message.content
-
-    def _stream_anthropic(self, messages: list[dict], system: str) -> Generator[str, None, None]:
-        with self._anthropic.messages.stream(
-            model=self.primary_model,
-            max_tokens=1024,
-            system=system,
-            messages=messages,
-        ) as stream:
-            for text in stream.text_stream:
-                yield text
-
-    def _stream_openai(self, messages: list[dict], system: str) -> Generator[str, None, None]:
-        full_messages = [{"role": "system", "content": system}] + messages
-        stream = self._openai.chat.completions.create(
-            model=self.fallback_model,
-            messages=full_messages,
-            max_tokens=1024,
-            stream=True,
-        )
-        for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
-
-    def _local_fallback(self, user_input: str) -> str:
-        if self._last_error:
-            logger.error("All LLM backends failed. Last error: %s", self._last_error)
-        else:
-            logger.error("All LLM backends failed — no clients configured")
+    def _backend_error_response(self, user_input: str, error: str) -> str:
+        """Last-resort fallback when the active backend raises — answer simple
+        queries locally rather than going silent."""
         keywords = user_input.lower()
         if any(w in keywords for w in ("time", "date", "day")):
-            from datetime import datetime, timezone, timedelta
             utc7 = timezone(timedelta(hours=7))
             now = datetime.now(utc7)
             return f"It's {now.strftime('%H:%M on %A, %d %B %Y')} in Jakarta."
         if any(w in keywords for w in ("hello", "hi", "hey")):
             return "Online and operational."
-        if self._last_error:
-            return f"I'm having trouble reaching my brain right now. Error: {self._last_error[:80]}"
-        return "No AI backends are configured. Set ANTHROPIC_API_KEY in your .env file."
+        other = "local" if self.active_provider == "claude" else "claude"
+        return (
+            f"I'm having trouble reaching the {self.active_provider} backend. "
+            f"Try 'switch to {other}' or check your connection. Error: {error[:80]}"
+        )
 
 
 if __name__ == "__main__":

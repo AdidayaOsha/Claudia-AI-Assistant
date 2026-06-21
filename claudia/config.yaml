@@ -30,6 +30,25 @@ llm:
   context_window: 10
   max_retries: 3
 
+brain:
+  active_provider: "claude"        # "claude" | "local" — which backend answers right now
+  switch_phrases:
+    local: ["switch to local", "use local model", "switch to ollama"]
+    claude: ["switch to claude", "use claude", "switch to cloud"]
+
+  claude:
+    model: "claude-sonnet-4-6"
+    max_tokens: 1024
+
+  local:
+    provider: "ollama"
+    base_url: "http://localhost:11434"
+    model: "qwen2.5:7b-instruct"    # change to test other pulled models
+    max_tokens: 512                  # smaller than Claude's — keep local responses snappy
+    temperature: 0.7
+    timeout_seconds: 30              # local generation can be slow on first load (model warm-up)
+    max_context_chars: 6000          # ~1500 tokens — local models degrade with long stuffed context
+
 voice:
   engine: "elevenlabs"       # "pyttsx3" | "elevenlabs"
   rate: 175

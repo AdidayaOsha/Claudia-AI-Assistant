@@ -1,9 +1,29 @@
 import logging
+import re
 import threading
 import time
 from queue import Queue, Empty
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove markdown syntax that TTS engines would read literally."""
+    # Bold/italic: ***x***, **x**, *x*, __x__, _x_
+    text = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'_{1,3}(.*?)_{1,3}', r'\1', text, flags=re.DOTALL)
+    # Headers: ## Title → Title
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Inline code / code blocks
+    text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)
+    # Links: [label](url) → label
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    # Bullet / numbered list markers
+    text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
+    # Collapse newlines to spaces
+    text = re.sub(r'\n+', ' ', text)
+    return text.strip()
 
 
 class Speaker:
@@ -21,6 +41,7 @@ class Speaker:
         self._barge_in_enabled: bool = listener_cfg.get("enable_barge_in", True)
         self._barge_in_threshold: int = listener_cfg.get("barge_in_threshold", 600)
         self._engine = None
+        self._pyttsx3_engine = None  # secondary offline engine for fast/local TTS
         self._worker_thread: threading.Thread | None = None
         self._init_engine()
         self._start_worker()
@@ -45,6 +66,25 @@ class Speaker:
             logger.error("pyttsx3 init failed: %s", e)
             self._engine = None
 
+    def _try_init_pyttsx3_secondary(self) -> None:
+        """Lazily initialise pyttsx3 as a secondary offline engine.
+        Called on first fast=True speak, NOT at startup — eager init after
+        pygame.mixer.init() breaks the ElevenLabs audio path on Windows."""
+        if self._pyttsx3_engine is not None:
+            return  # already done
+        if self.engine_name == "pyttsx3":
+            self._pyttsx3_engine = self._engine
+            return
+        try:
+            import pyttsx3
+            eng = pyttsx3.init()
+            eng.setProperty("rate", self.rate)
+            eng.setProperty("volume", self.volume)
+            self._pyttsx3_engine = eng
+            logger.info("pyttsx3 secondary engine ready (fast offline TTS)")
+        except Exception as e:
+            logger.debug("pyttsx3 secondary engine unavailable: %s", e)
+
     def _init_elevenlabs(self) -> None:
         try:
             import os
@@ -65,20 +105,32 @@ class Speaker:
     def _worker(self) -> None:
         while not self._stop_event.is_set():
             try:
-                text = self._queue.get(timeout=0.2)
-                if text is None:
+                item = self._queue.get(timeout=0.2)
+                if item is None:
                     break
-                self._speak_now(text)
+                text, fast = item if isinstance(item, tuple) else (item, False)
+                self._speak_now(text, fast=fast)
                 self._queue.task_done()
             except Empty:
                 continue
             except Exception as e:
                 logger.error("Speaker worker error: %s", e)
 
-    def _speak_now(self, text: str) -> None:
+    def _speak_now(self, text: str, fast: bool = False) -> None:
         self._speaking = True
         self._interrupted.clear()
         try:
+            if fast:
+                # Lazy-init pyttsx3 on first use (avoids breaking pygame mixer at startup)
+                if self._pyttsx3_engine is None:
+                    self._try_init_pyttsx3_secondary()
+                if self._pyttsx3_engine:
+                    try:
+                        self._pyttsx3_engine.say(text)
+                        self._pyttsx3_engine.runAndWait()
+                    except Exception as e:
+                        logger.error("Fast TTS (pyttsx3) error: %s", e)
+                    return  # don't fall through to ElevenLabs path
             if self.engine_name == "pyttsx3" and self._engine:
                 try:
                     self._engine.say(text)
@@ -242,11 +294,12 @@ class Speaker:
         self._drain_queue()
         logger.info("Speech interrupted")
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, fast: bool = False) -> None:
         """Queue text for non-blocking TTS output."""
+        text = _strip_markdown(text)
         if not text:
             return
-        self._queue.put(text)
+        self._queue.put((text, fast))
 
     def speak_sync(self, text: str) -> None:
         """Speak immediately and block until done (for boot messages)."""

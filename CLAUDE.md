@@ -332,4 +332,7 @@ Note: Boot uses `[OK]`/`[!!]` (ASCII) not unicode symbols — Windows console co
 ## 🌐 INTERNET RESEARCH MODULE
 See `docs/internet_research.md` — skill file: `skills/research.py`.
 
+## 🔀 BRAIN BACKEND SWITCH
+See `docs/brain_backend_switch.md` — voice/text switch between Claude API and local Ollama model at runtime.
+
 *— `CLAUDE.md` lives at `C:\Projects\Claudia\CLAUDE.md` and is read automatically by Claude Code on every session start.*

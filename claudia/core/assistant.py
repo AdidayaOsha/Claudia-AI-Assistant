@@ -43,7 +43,11 @@ class Assistant:
             (lambda q: research_skill.execute({"query": q, "raw_input": q}))
             if research_skill else None
         )
-        self.brain = Brain(config, research_fn=research_fn)
+        def _on_searching():
+            self.speaker.speak("Searching the web now. Stand by.")
+            self._emit("transcript", {"role": "assistant", "text": "Searching the web..."})
+
+        self.brain = Brain(config, research_fn=research_fn, searching_callback=_on_searching)
         self.listener = Listener(config)
         self.speaker = Speaker(config)
         self.router = IntentRouter(self.skills, config)
@@ -53,6 +57,8 @@ class Assistant:
         self._memory_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="memory"
         )
+        # Set by _think_stream_and_collect(); checked in run() to skip double-speak
+        self._streamed_response: bool = False
 
     def set_socket_emit(self, emit_fn: Callable) -> None:
         self._socket_emit = emit_fn
@@ -158,7 +164,11 @@ class Assistant:
                         self._extract_and_save_facts, user_input
                     )
 
-                self.speaker.speak(response)
+                # Streaming path (local backend) already spoke sentence-by-sentence;
+                # non-streaming path (Claude / skills) needs the full speak call here.
+                if not self._streamed_response:
+                    self.speaker.speak(response)
+                self._streamed_response = False  # reset every turn
                 self.listener.enter_conversation_mode()
 
             except KeyboardInterrupt:
@@ -188,6 +198,12 @@ class Assistant:
         return any(phrase in lower for phrase in phrases)
 
     def _process(self, user_input: str, context: list[dict] | None = None) -> str:
+        # Meta-command check — must run before skill/intent routing so phrases
+        # like "switch to local" are never accidentally matched by a skill.
+        switch_result = self._check_provider_switch(user_input)
+        if switch_result is not None:
+            return switch_result
+
         skill, params = self.router.route(user_input)
         if skill:
             return self._process_skill(skill, params, user_input, context)
@@ -195,21 +211,32 @@ class Assistant:
         if context is None:
             context = []
         memory_ctx = self.memory.get_memory_context()
+
+        # Local backend: stream tokens → sentence-chunked pyttsx3 TTS → low latency
+        # Claude backend: full response → ElevenLabs → preserves tool-use loop
+        if self.brain.active_provider == "local":
+            return self._think_stream_and_collect(user_input, context, memory_ctx)
         return self.brain.think(user_input, context, memory_context=memory_ctx)
 
     def _process_skill(self, skill, params, user_input, context):
         """Execute a skill; skills with research_output=True inject results into the LLM."""
         self._emit("skill_active", {"skill": skill.name})
         is_research = getattr(skill, "research_output", False)
+
+        if is_research:
+            searching_msg = "Searching the web now. Stand by."
+            self.speaker.speak(searching_msg)
+            self._emit("transcript", {"role": "assistant", "text": "Searching the web..."})
+
         try:
             if is_research:
                 future = self._research_executor.submit(skill.execute, params)
-                result = future.result(timeout=30)
+                result = future.result(timeout=60)
             else:
                 result = skill.execute(params)
         except concurrent.futures.TimeoutError:
-            logger.error("Skill '%s' timed out after 30s", skill.name)
-            return "I wasn't able to pull live data on that."
+            logger.error("Skill '%s' timed out", skill.name)
+            return "I wasn't able to pull live data on that — the search timed out."
         except Exception as e:
             logger.error("Skill '%s' failed: %s", skill.name, e)
             return f"I ran into an issue with {skill.name}. Standing by."
@@ -223,6 +250,91 @@ class Assistant:
                 memory_context=memory_ctx,
             )
         return result
+
+    # ------------------------------------------------------------------ #
+    #  Local backend streaming                                            #
+    # ------------------------------------------------------------------ #
+
+    def _think_stream_and_collect(
+        self,
+        user_input: str,
+        context: list[dict],
+        memory_ctx: str | None,
+    ) -> str:
+        """
+        Stream tokens from the local backend, flushing complete sentences to
+        ElevenLabs TTS as they arrive (sentence-level pipelining).
+
+        While ElevenLabs plays sentence N, the LLM is already generating sentence N+1.
+        Time-to-first-sound = time to generate first sentence (~2-5 s) instead of
+        waiting for the full response (~10-20 s). Voice quality is identical to Claude.
+        """
+        import re
+        SENT_END = re.compile(r'(?<=[.!?])\s+')
+        MIN_CHARS = 25  # flush when sentence text before punctuation meets this length
+
+        # Fail fast: 2-second ping before committing to a 30-second stream attempt
+        if not self.brain.active_backend.is_available():
+            msg = "Local model isn't reachable right now. Say 'switch to claude' to continue."
+            self.speaker.speak(msg)
+            self._streamed_response = True
+            return msg
+
+        buf = ""
+        full_text = ""
+
+        try:
+            for token in self.brain.think_stream(
+                user_input, context, memory_context=memory_ctx
+            ):
+                buf += token
+                full_text += token
+
+                match = SENT_END.search(buf)
+                if match and len(buf[: match.start()].strip()) >= MIN_CHARS:
+                    sentence = buf[: match.end()].strip()
+                    buf = buf[match.end():]
+                    self.speaker.speak(sentence)  # ElevenLabs, queued non-blocking
+
+            if buf.strip():
+                self.speaker.speak(buf.strip())  # flush final fragment
+
+        except Exception as e:
+            # Do NOT retry brain.think() — same local backend, second 30-second timeout
+            logger.warning("Local stream failed: %s", e)
+            msg = (
+                "Local model timed out. Say 'switch to claude' to continue, "
+                f"or wait for Ollama to finish loading. Error: {str(e)[:60]}"
+            )
+            self.speaker.speak(msg)
+            self._streamed_response = True
+            return msg
+
+        self._streamed_response = True
+        return full_text.strip() or "(no response)"
+
+    # ------------------------------------------------------------------ #
+    #  Provider switching                                                  #
+    # ------------------------------------------------------------------ #
+
+    def _check_provider_switch(self, user_input: str) -> str | None:
+        """
+        Detect brain-provider switch commands before intent routing.
+        Returns a spoken confirmation string if matched, None otherwise.
+        Phrases are configured in config.yaml under brain.switch_phrases.
+        """
+        t = user_input.lower().strip()
+        switch_cfg = self.config.get("brain", {}).get("switch_phrases", {})
+
+        for phrase in switch_cfg.get("local", []):
+            if phrase in t:
+                return self.brain.switch_provider("local")
+
+        for phrase in switch_cfg.get("claude", []):
+            if phrase in t:
+                return self.brain.switch_provider("claude")
+
+        return None
 
     # ------------------------------------------------------------------ #
     #  Memory helpers                                                      #

@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -9,11 +10,14 @@ from core.brain import Brain, SYSTEM_PROMPT
 
 CONFIG = {"llm": {"primary_model": "claude-sonnet-4-6", "context_window": 10, "max_retries": 3}}
 
+_FAKE_ENV = {"ANTHROPIC_API_KEY": "test-key", "OPENAI_API_KEY": "test-key"}
+
 
 class TestBrainThink:
     def _make_brain(self):
-        with patch("anthropic.Anthropic"), patch("openai.OpenAI"):
-            brain = Brain(CONFIG)
+        with patch.dict(os.environ, _FAKE_ENV):
+            with patch("anthropic.Anthropic"), patch("openai.OpenAI"):
+                brain = Brain(CONFIG)
         return brain
 
     def test_think_returns_string(self):
@@ -41,15 +45,15 @@ class TestBrainThink:
         brain._anthropic.messages.create.side_effect = Exception("API error")
         mock_oai_response = MagicMock()
         mock_oai_response.choices = [MagicMock(message=MagicMock(content="Fallback reply"))]
-        brain._openai.chat.completions.create.return_value = mock_oai_response
+        brain._claude_backend._openai.chat.completions.create.return_value = mock_oai_response
         result = brain.think("Hello", [])
         assert isinstance(result, str)
-        assert brain._openai.chat.completions.create.called
+        assert brain._claude_backend._openai.chat.completions.create.called
 
     def test_local_fallback_on_all_failures(self):
         brain = self._make_brain()
         brain._anthropic.messages.create.side_effect = Exception("fail")
-        brain._openai.chat.completions.create.side_effect = Exception("fail")
+        brain._claude_backend._openai.chat.completions.create.side_effect = Exception("fail")
         result = brain.think("hello", [])
         assert isinstance(result, str)
         assert len(result) > 0
@@ -62,7 +66,7 @@ class TestBrainThink:
     def test_build_messages_appends_user(self):
         brain = self._make_brain()
         context = [{"role": "assistant", "content": "Hi"}]
-        messages = brain._build_messages("test input", context)
+        messages = brain._build_messages("test input", context, None, None)
         assert messages[-1] == {"role": "user", "content": "test input"}
 
     def test_think_stream_yields_strings(self):

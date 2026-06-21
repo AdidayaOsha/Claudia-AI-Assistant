@@ -70,17 +70,17 @@ class TestIntentRouter:
         assert skill is not None
         assert skill.name == "news_briefing"
 
-    def test_routes_research_via_regex_when_no_other_skill_matches(self):
+    def test_unmatched_research_query_falls_through_to_brain(self):
+        # Research routing was removed from the router — the Brain handles it
+        # autonomously via tool use. Unmatched queries return None.
         router = self._router()
         skill, _ = router.route("what is happening in Jakarta right now")
-        assert skill is not None
-        assert skill.name == "research", f"Expected research, got {skill.name}"
+        assert skill is None
 
-    def test_routes_research_via_as_of_today_pattern(self):
+    def test_unmatched_as_of_today_falls_through_to_brain(self):
         router = self._router()
         skill, _ = router.route("as of today what is the price of gold")
-        assert skill is not None
-        assert skill.name == "research"
+        assert skill is None
 
     def test_research_skip_when_existing_skill_matches(self):
         router = self._router()

@@ -143,6 +143,10 @@ def main() -> None:
         if sio:
             assistant.set_socket_emit(lambda event, data: sio.emit(event, data))
 
+            @sio.on("connect")
+            def on_client_connect():
+                sio.emit("provider_changed", assistant.brain.provider_info())
+
             @sio.on("user_input")
             def on_dashboard_input(data):
                 text = data.get("text", "").strip()

@@ -3,162 +3,300 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CLAUDIA — Control Interface</title>
+  <title>CLAUDIA</title>
   <link rel="stylesheet" href="/static/style.css" />
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
-  <div class="hud-frame">
 
-    <!-- Header -->
-    <header class="hud-header">
-      <div class="header-left">
-        <div class="logo-ring"></div>
-        <div>
-          <h1 class="logo-text">CLAUDIA</h1>
-          <span class="logo-sub">AI PERSONAL ASSISTANT</span>
-        </div>
-      </div>
-      <div class="header-right">
-        <div class="status-indicator" id="status-dot"></div>
-        <span class="status-text" id="status-text">CONNECTING</span>
-      </div>
-    </header>
+  <!-- Corner HUD overlays -->
+  <div class="hud-corner tl">
+    <div class="hud-title">CLAUDIA</div>
+    <div class="hud-sub">AI PERSONAL ASSISTANT</div>
+    <div class="hud-status-row">
+      <span class="status-dot" id="status-dot"></span>
+      <span class="hud-status-txt" id="status-text">CONNECTING</span>
+    </div>
+    <div class="hud-model-row" id="model-row">
+      <span class="model-dot" id="model-dot"></span>
+      <span class="hud-model-label" id="model-label">—</span>
+    </div>
+    <div class="hud-model-name" id="model-name">—</div>
+  </div>
 
-    <!-- Main grid -->
-    <main class="hud-grid">
+  <div class="hud-corner tr">
+    <div class="hud-time" id="local-time">--:--:--</div>
+    <div class="hud-sub">WIB · JAKARTA</div>
+    <div class="hud-sub" style="margin-top:6px">
+      CPU <span id="cpu-val">--%</span> &nbsp;·&nbsp; RAM <span id="ram-val">--%</span>
+    </div>
+  </div>
 
-      <!-- Transcript panel -->
-      <section class="panel panel-transcript">
-        <div class="panel-title">LIVE TRANSCRIPT</div>
-        <div class="transcript-body" id="transcript"></div>
-        <div class="input-row">
-          <input type="text" id="text-input" placeholder="Type a command…" autocomplete="off" />
-          <button id="send-btn">SEND</button>
-        </div>
-      </section>
+  <div class="hud-corner bl">
+    <div class="hud-sub">ACTIVE MODULE</div>
+    <div class="hud-module" id="skill-name">STANDBY</div>
+  </div>
 
-      <!-- Stats panel -->
-      <section class="panel panel-stats">
-        <div class="panel-title">SYSTEM STATUS</div>
-        <div class="stat-row">
-          <span class="stat-label">CPU</span>
-          <div class="bar-bg"><div class="bar-fill" id="cpu-bar"></div></div>
-          <span class="stat-value" id="cpu-val">—</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-label">RAM</span>
-          <div class="bar-bg"><div class="bar-fill" id="ram-bar"></div></div>
-          <span class="stat-value" id="ram-val">—</span>
-        </div>
-        <div class="stat-row uptime-row">
-          <span class="stat-label">UPTIME</span>
-          <span class="stat-value" id="uptime-val">—</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-label">LOCAL TIME</span>
-          <span class="stat-value" id="local-time">—</span>
-        </div>
-      </section>
+  <div class="hud-corner br">
+    <div class="hud-sub">UPTIME</div>
+    <div class="hud-val" id="uptime-val">--</div>
+  </div>
 
-      <!-- Active skill -->
-      <section class="panel panel-skill">
-        <div class="panel-title">ACTIVE MODULE</div>
-        <div class="skill-display" id="skill-display">
-          <span class="skill-icon">◈</span>
-          <span class="skill-name" id="skill-name">STANDBY</span>
-        </div>
-      </section>
+  <!-- Arc reactor -->
+  <div class="reactor-wrap">
+    <svg id="reactor" class="reactor-svg" viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="f-sm" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="2.5" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <filter id="f-md" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="7" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <filter id="f-lg" x="-120%" y="-120%" width="340%" height="340%">
+          <feGaussianBlur stdDeviation="16" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <radialGradient id="g-core" cx="50%" cy="42%" r="58%">
+          <stop offset="0%"   stop-color="#00ffd0"/>
+          <stop offset="45%"  stop-color="#00aaff" stop-opacity="0.75"/>
+          <stop offset="100%" stop-color="#001e3a" stop-opacity="0.95"/>
+        </radialGradient>
+        <radialGradient id="g-bg" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stop-color="#001525"/>
+          <stop offset="100%" stop-color="#000008"/>
+        </radialGradient>
+      </defs>
 
-      <!-- History sidebar -->
-      <section class="panel panel-history">
-        <div class="panel-title">SESSION LOG</div>
-        <ul class="history-list" id="history-list"></ul>
-      </section>
+      <!-- Dark background -->
+      <circle cx="300" cy="300" r="298" fill="url(#g-bg)"/>
 
-    </main>
+      <!-- Outer static rings -->
+      <circle cx="300" cy="300" r="292" fill="none" stroke="rgba(0,212,255,0.12)" stroke-width="1"/>
+      <circle cx="300" cy="300" r="287" fill="none" stroke="rgba(0,212,255,0.07)" stroke-width="0.5"/>
 
+      <!-- Rotating tick ring (CW slow) -->
+      <g id="tick-ring" class="rot-cw-slow"></g>
+
+      <!-- Scrolling dashed ring -->
+      <circle cx="300" cy="300" r="263" fill="none"
+              stroke="rgba(0,212,255,0.28)" stroke-width="1.5"
+              stroke-dasharray="5 7" class="dash-ccw"/>
+
+      <!-- LED dot ring (CW medium) -->
+      <g id="dots-ring" class="rot-cw"></g>
+
+      <!-- Static separator ring -->
+      <circle cx="300" cy="300" r="210" fill="none" stroke="rgba(0,212,255,0.18)" stroke-width="1"/>
+
+      <!-- Detail marker ring (CCW) -->
+      <g id="detail-ring" class="rot-ccw"></g>
+
+      <!-- Scrolling dashed inner ring -->
+      <circle cx="300" cy="300" r="193" fill="none"
+              stroke="rgba(0,212,255,0.35)" stroke-width="1.5"
+              stroke-dasharray="10 7" class="dash-cw"/>
+
+      <!-- Inner structure -->
+      <circle cx="300" cy="300" r="178" fill="rgba(0,18,38,0.4)"
+              stroke="rgba(0,212,255,0.40)" stroke-width="1"/>
+      <circle cx="300" cy="300" r="163" fill="rgba(0,22,46,0.55)"
+              stroke="rgba(0,218,255,0.52)" stroke-width="1.5"/>
+      <circle cx="300" cy="300" r="147" fill="rgba(0,28,55,0.65)"
+              stroke="rgba(0,225,255,0.68)" stroke-width="2"
+              filter="url(#f-sm)"/>
+
+      <!-- Core ring -->
+      <circle id="core-ring" cx="300" cy="300" r="112"
+              fill="rgba(0,14,32,0.90)" stroke="rgba(0,212,255,0.95)"
+              stroke-width="3" filter="url(#f-md)"/>
+
+      <!-- Core fill (pulses when speaking) -->
+      <circle id="core-fill" cx="300" cy="300" r="96"
+              fill="url(#g-core)" filter="url(#f-md)"/>
+
+      <!-- Core inner glow -->
+      <circle id="core-glow" cx="300" cy="300" r="68"
+              fill="rgba(0,255,210,0.18)" filter="url(#f-lg)"/>
+      <circle cx="300" cy="300" r="50" fill="rgba(0,255,200,0.07)"/>
+
+      <!-- Core text -->
+      <text x="300" y="291" text-anchor="middle" class="core-label">CLAUDIA</text>
+      <text x="300" y="314" text-anchor="middle" class="core-sub">AI SYSTEM</text>
+    </svg>
+  </div>
+
+  <!-- Live subtitle -->
+  <div class="subtitle-wrap">
+    <span class="sub-role" id="sub-role"></span>
+    <span class="sub-text" id="sub-text">&nbsp;</span>
+  </div>
+
+  <!-- Command input -->
+  <div class="input-wrap">
+    <input type="text" id="text-input" placeholder="ENTER COMMAND…" autocomplete="off" />
+    <button id="send-btn">SEND</button>
   </div>
 
   <script>
-    const socket = io();
-    const transcript = document.getElementById('transcript');
-    const historyList = document.getElementById('history-list');
+    const socket   = io();
+    const NS       = 'http://www.w3.org/2000/svg';
+    const CX = 300, CY = 300;
+
+    // DOM refs
+    const reactor   = document.getElementById('reactor');
+    const subRole   = document.getElementById('sub-role');
+    const subText   = document.getElementById('sub-text');
     const statusDot = document.getElementById('status-dot');
-    const statusText = document.getElementById('status-text');
-    const skillName = document.getElementById('skill-name');
-    const textInput = document.getElementById('text-input');
-    const sendBtn = document.getElementById('send-btn');
+    const statusTxt = document.getElementById('status-text');
+    const skillEl   = document.getElementById('skill-name');
+    const txtInput  = document.getElementById('text-input');
+    const sendBtn   = document.getElementById('send-btn');
 
-    socket.on('connect', () => {
-      statusDot.className = 'status-indicator online';
-      statusText.textContent = 'ONLINE';
-    });
-
-    socket.on('disconnect', () => {
-      statusDot.className = 'status-indicator offline';
-      statusText.textContent = 'OFFLINE';
-    });
+    // ── Socket events ─────────────────────────────────────────────
+    socket.on('connect',    () => { statusDot.className = 'status-dot online';  statusTxt.textContent = 'ONLINE'; });
+    socket.on('disconnect', () => { statusDot.className = 'status-dot offline'; statusTxt.textContent = 'OFFLINE'; });
 
     socket.on('transcript', (data) => {
-      const div = document.createElement('div');
-      div.className = `msg msg-${data.role}`;
-      div.innerHTML = `<span class="msg-role">${data.role.toUpperCase()}</span><span class="msg-text">${escHtml(data.text)}</span>`;
-      transcript.appendChild(div);
-      transcript.scrollTop = transcript.scrollHeight;
-
-      // Add to history sidebar
-      const li = document.createElement('li');
-      li.textContent = data.text.substring(0, 60) + (data.text.length > 60 ? '…' : '');
-      li.className = `history-${data.role}`;
-      historyList.prepend(li);
-      if (historyList.children.length > 20) historyList.lastChild.remove();
+      subRole.textContent = data.role === 'assistant' ? 'CLAUDIA' : 'YOU';
+      subRole.className   = 'sub-role role-' + data.role;
+      fadeSubtitle(data.text);
     });
 
     socket.on('skill_active', (data) => {
-      skillName.textContent = data.skill.toUpperCase().replace('_', ' ');
-      skillName.classList.add('pulse');
-      setTimeout(() => skillName.classList.remove('pulse'), 1500);
+      skillEl.textContent = data.skill.toUpperCase().replace(/_/g, ' ');
+      skillEl.classList.add('flare');
+      setTimeout(() => skillEl.classList.remove('flare'), 2200);
     });
 
-    // Stats polling
-    function updateStats() {
-      fetch('/api/stats')
-        .then(r => r.json())
-        .then(d => {
-          document.getElementById('cpu-val').textContent = d.cpu_percent.toFixed(1) + '%';
-          document.getElementById('ram-val').textContent = d.ram_percent.toFixed(1) + '%';
-          document.getElementById('uptime-val').textContent = d.uptime;
-          document.getElementById('cpu-bar').style.width = d.cpu_percent + '%';
-          document.getElementById('ram-bar').style.width = d.ram_percent + '%';
-        })
-        .catch(() => {});
+    socket.on('provider_changed', (data) => {
+      const dot   = document.getElementById('model-dot');
+      const label = document.getElementById('model-label');
+      const name  = document.getElementById('model-name');
+      const isLocal = data.provider === 'local';
+      dot.className   = 'model-dot '  + (isLocal ? 'model-local'  : 'model-claude');
+      label.className = 'hud-model-label' + (isLocal ? ' model-local' : '');
+      label.textContent = data.label || '—';
+      name.textContent  = data.model || '—';
+    });
+
+    socket.on('speaking', (data) => {
+      reactor.classList.toggle('speaking', !!data.active);
+      if (!data.active) reactor.classList.remove('flare');
+    });
+
+    // Syllable peaks: pre-scheduled flares aligned to audio amplitude peaks
+    const _flareTimers = [];
+    socket.on('speaking_peaks', (data) => {
+      // Clear any leftover timers from previous utterance
+      _flareTimers.forEach(t => clearTimeout(t));
+      _flareTimers.length = 0;
+
+      (data.peaks || []).forEach(t => {
+        _flareTimers.push(setTimeout(() => {
+          reactor.classList.add('flare');
+          setTimeout(() => reactor.classList.remove('flare'), 140);
+        }, t * 1000));
+      });
+    });
+
+    // ── Subtitle fade ─────────────────────────────────────────────
+    function fadeSubtitle(text) {
+      subText.classList.add('fade-out');
+      setTimeout(() => {
+        subText.textContent = text || ' ';
+        subText.classList.remove('fade-out');
+      }, 160);
     }
 
-    function updateClock() {
-      const now = new Date();
+    // ── Stats & clock ─────────────────────────────────────────────
+    function pollStats() {
+      fetch('/api/stats').then(r => r.json()).then(d => {
+        document.getElementById('cpu-val').textContent    = d.cpu_percent.toFixed(1) + '%';
+        document.getElementById('ram-val').textContent    = d.ram_percent.toFixed(1) + '%';
+        document.getElementById('uptime-val').textContent = d.uptime;
+      }).catch(() => {});
+    }
+    function tickClock() {
       document.getElementById('local-time').textContent =
-        now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta', hour12: false });
+        new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Jakarta', hour12: false });
+    }
+    setInterval(pollStats, 3000); setInterval(tickClock, 1000);
+    pollStats(); tickClock();
+
+    // ── Input ─────────────────────────────────────────────────────
+    function send() {
+      const t = txtInput.value.trim();
+      if (!t) return;
+      socket.emit('user_input', { text: t });
+      txtInput.value = '';
+    }
+    sendBtn.addEventListener('click', send);
+    txtInput.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+    // ── SVG helpers ───────────────────────────────────────────────
+    function mkEl(tag, attrs) {
+      const el = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+      return el;
+    }
+    function polar(r, deg) {
+      const rad = (deg - 90) * Math.PI / 180;
+      return [CX + r * Math.cos(rad), CY + r * Math.sin(rad)];
     }
 
-    setInterval(updateStats, 3000);
-    setInterval(updateClock, 1000);
-    updateStats();
-    updateClock();
+    // Tick ring — 72 ticks every 5°, long ticks every 30°
+    (function buildTicks() {
+      const g = document.getElementById('tick-ring');
+      for (let i = 0; i < 72; i++) {
+        const major = i % 6 === 0;
+        const [x1, y1] = polar(major ? 269 : 273, i * 5);
+        const [x2, y2] = polar(283, i * 5);
+        g.appendChild(mkEl('line', {
+          x1, y1, x2, y2,
+          stroke: major ? 'rgba(0,212,255,0.7)' : 'rgba(0,212,255,0.22)',
+          'stroke-width': major ? 1.6 : 0.8,
+        }));
+      }
+    })();
 
-    // Text input
-    function sendInput() {
-      const text = textInput.value.trim();
-      if (!text) return;
-      socket.emit('user_input', { text });
-      textInput.value = '';
-    }
-    sendBtn.addEventListener('click', sendInput);
-    textInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendInput(); });
+    // LED dot ring — 60 dots at r=236, bigger dots every 5th
+    (function buildDots() {
+      const g = document.getElementById('dots-ring');
+      for (let i = 0; i < 60; i++) {
+        const [cx, cy] = polar(236, i * 6);
+        const big = i % 5 === 0;
+        const lit = big || Math.random() > 0.4;
+        g.appendChild(mkEl('circle', {
+          cx, cy,
+          r: big ? 4.5 : 2.8,
+          fill: '#00d4ff',
+          opacity: lit ? (0.55 + Math.random() * 0.45).toFixed(2) : (0.08 + Math.random() * 0.14).toFixed(2),
+          filter: lit ? 'url(#f-sm)' : '',
+          class: 'led-dot' + (big ? ' led-big' : ''),
+        }));
+      }
+    })();
 
-    function escHtml(s) {
-      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    }
+    // Detail ring — 36 square markers at r=209, orange accent every 3rd
+    (function buildDetail() {
+      const g = document.getElementById('detail-ring');
+      for (let i = 0; i < 36; i++) {
+        const deg = i * 10;
+        const [px, py] = polar(209, deg);
+        const main = i % 3 === 0;
+        const sz   = main ? 5.5 : 2.5;
+        g.appendChild(mkEl('rect', {
+          x: (px - sz / 2).toFixed(2),
+          y: (py - sz / 2).toFixed(2),
+          width: sz, height: sz,
+          fill:    main ? '#ff6a00' : '#cc2800',
+          opacity: main ? 0.85 : 0.45,
+          transform: `rotate(${deg}, ${px.toFixed(2)}, ${py.toFixed(2)})`,
+        }));
+      }
+    })();
   </script>
 </body>
 </html>

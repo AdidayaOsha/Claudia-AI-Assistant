@@ -3,8 +3,48 @@ import re
 import threading
 import time
 from queue import Queue, Empty
+from typing import Callable
 
 logger = logging.getLogger(__name__)
+
+
+def _pcm_amplitude_peaks(pcm_bytes: bytes, sample_rate: int = 22050) -> list[float]:
+    """
+    Detect amplitude peaks in raw 16-bit signed mono PCM.
+    Returns timestamps (seconds) that correlate with syllable onsets.
+    Pure Python — no numpy required.
+    """
+    import struct
+    if len(pcm_bytes) < 4:
+        return []
+
+    window = int(sample_rate * 0.025)   # 25 ms analysis window
+    stride = window                      # non-overlapping
+    n      = len(pcm_bytes) // 2        # total 16-bit samples
+
+    envelope = []
+    for i in range(0, n - window, stride):
+        chunk = struct.unpack_from(f'<{window}h', pcm_bytes, i * 2)
+        rms = (sum(s * s for s in chunk) / window) ** 0.5
+        envelope.append(rms)
+
+    if not envelope:
+        return []
+
+    threshold = max(envelope) * 0.38
+    min_gap   = max(1, int(0.085 / (window / sample_rate)))  # ≥ 85 ms between peaks
+
+    peaks = []
+    last  = -min_gap
+    for i, amp in enumerate(envelope):
+        if amp >= threshold and (i - last) >= min_gap:
+            lo = max(0, i - 2)
+            hi = min(len(envelope) - 1, i + 2)
+            if amp == max(envelope[lo : hi + 1]):
+                peaks.append(round(i * window / sample_rate, 3))
+                last = i
+
+    return peaks
 
 
 def _strip_markdown(text: str) -> str:
@@ -43,6 +83,9 @@ class Speaker:
         self._engine = None
         self._pyttsx3_engine = None  # secondary offline engine for fast/local TTS
         self._worker_thread: threading.Thread | None = None
+        self._on_speak_start: Callable | None = None        # fired when TTS begins
+        self._on_speak_stop: Callable | None = None         # fired when TTS ends
+        self._on_speak_peaks: Callable | None = None        # fired with syllable peak timestamps
         self._init_engine()
         self._start_worker()
 
@@ -119,6 +162,11 @@ class Speaker:
     def _speak_now(self, text: str, fast: bool = False) -> None:
         self._speaking = True
         self._interrupted.clear()
+        if self._on_speak_start:
+            try:
+                self._on_speak_start()
+            except Exception:
+                pass
         try:
             if fast:
                 # Lazy-init pyttsx3 on first use (avoids breaking pygame mixer at startup)
@@ -142,6 +190,11 @@ class Speaker:
         finally:
             self._speaking = False
             self._interrupted.clear()
+            if self._on_speak_stop:
+                try:
+                    self._on_speak_stop()
+                except Exception:
+                    pass
 
     def _speak_elevenlabs(self, text: str) -> None:
         try:
@@ -154,6 +207,16 @@ class Speaker:
                 output_format="pcm_22050",
             )
             pcm_bytes = b"".join(audio_iter)
+
+            # Analyze amplitude peaks BEFORE playback so frontend can pre-schedule flares
+            if self._on_speak_peaks:
+                try:
+                    peaks = _pcm_amplitude_peaks(pcm_bytes)
+                    if peaks:
+                        self._on_speak_peaks(peaks)
+                except Exception:
+                    pass
+
             import wave
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:

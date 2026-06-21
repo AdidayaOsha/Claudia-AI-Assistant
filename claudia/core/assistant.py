@@ -50,6 +50,9 @@ class Assistant:
         self.brain = Brain(config, research_fn=research_fn, searching_callback=_on_searching)
         self.listener = Listener(config)
         self.speaker = Speaker(config)
+        self.speaker._on_speak_start = lambda: self._emit("speaking", {"active": True})
+        self.speaker._on_speak_stop  = lambda: self._emit("speaking", {"active": False})
+        self.speaker._on_speak_peaks = lambda peaks: self._emit("speaking_peaks", {"peaks": peaks})
         self.router = IntentRouter(self.skills, config)
         self._research_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="research"
@@ -105,6 +108,7 @@ class Assistant:
     def run(self) -> None:
         self._running.set()
         self._start_listener_thread()
+        self._emit("provider_changed", self.brain.provider_info())
         self.greet()
 
         while self._running.is_set():
@@ -328,11 +332,15 @@ class Assistant:
 
         for phrase in switch_cfg.get("local", []):
             if phrase in t:
-                return self.brain.switch_provider("local")
+                result = self.brain.switch_provider("local")
+                self._emit("provider_changed", self.brain.provider_info())
+                return result
 
         for phrase in switch_cfg.get("claude", []):
             if phrase in t:
-                return self.brain.switch_provider("claude")
+                result = self.brain.switch_provider("claude")
+                self._emit("provider_changed", self.brain.provider_info())
+                return result
 
         return None
 

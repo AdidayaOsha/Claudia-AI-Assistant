@@ -94,6 +94,20 @@ class Brain:
     #  Provider switching                                                  #
     # ------------------------------------------------------------------ #
 
+    def provider_info(self) -> dict:
+        """Return current provider label and model name for UI display."""
+        if self.active_provider == "local":
+            return {
+                "provider": "local",
+                "label": "LOCAL · OLLAMA",
+                "model": self._local_backend.model,
+            }
+        return {
+            "provider": "claude",
+            "label": "ANTHROPIC",
+            "model": self._claude_backend.primary_model,
+        }
+
     def switch_provider(self, provider: str) -> str:
         """
         Called by assistant._check_provider_switch(). Returns a short spoken

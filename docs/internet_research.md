@@ -1,15 +1,7 @@
 # 🌐 Internet Research Module — `skills/research.py`
 
-> **Drop this file at:** `C:\Projects\Claudia\docs\internet_research.md`
-> **Add to `CLAUDE.md`:** under the skill table, add a line pointing here.
-> **Status:** Not yet implemented — implement in this order:
-> 1. Install new dependencies
-> 2. Update `config.yaml`
-> 3. Update `.env.example`
-> 4. Create `skills/research.py`
-> 5. Update `core/intent_router.py`
-> 6. Update `core/brain.py` (context injection)
-> 7. Update `requirements.txt`
+> **Status:** Implemented — see `skills/research.py`, `core/brain.py`, `config.yaml`
+> **Active sources:** DuckDuckGo, Wikipedia, page-scrape (trafilatura). Brave optional via `BRAVE_API_KEY`.
 
 ---
 
@@ -612,13 +604,13 @@ else:
 
 ## ✅ ACCEPTANCE CRITERIA
 
-- [ ] "Search for the latest news about [topic]" → fetches live results, Claudia summarises in her voice
-- [ ] "Who is the current CEO of [company]?" → returns current answer, not training-data answer
-- [ ] "What's happening in Jakarta right now?" → pulls live news/web data
-- [ ] Repeated identical query within 5 minutes → served from cache (zero latency, zero API cost)
-- [ ] DDG down → graceful degradation (Wikipedia + scrape still work)
-- [ ] All sources timeout → Claudia says "I wasn't able to pull live data on that" and falls back to LLM knowledge
-- [ ] Research context does not leak into unrelated follow-up turns (context block is per-call, not stored in session memory)
+- [x] "Search for the latest news about [topic]" → fetches live results, Claudia summarises in her voice
+- [x] "Who is the current CEO of [company]?" → returns current answer, not training-data answer
+- [x] "What's happening in Jakarta right now?" → pulls live news/web data
+- [x] Repeated identical query within 5 minutes → served from cache (zero latency, zero API cost)
+- [x] DDG down → graceful degradation (Wikipedia + scrape still work)
+- [x] All sources timeout → Claudia says "I wasn't able to pull live data on that" and falls back to LLM knowledge
+- [x] Research context does not leak into unrelated follow-up turns (context block is per-call, not stored in session memory)
 
 ---
 

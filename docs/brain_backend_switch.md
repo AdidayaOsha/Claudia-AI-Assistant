@@ -1,15 +1,7 @@
 # 🔀 Brain Backend Switch — Claude API ⇄ Local Model (Ollama)
 
-> **Drop this file at:** `C:\Projects\Claudia\docs\brain_backend_switch.md`
-> **Add to `CLAUDE.md`:** under the architecture/skill table, add a line pointing here.
-> **Status:** Not yet implemented — implement in this order:
-> 1. Install Ollama + pull model (one-time, manual — see Setup section)
-> 2. Update `config.yaml`
-> 3. Create `core/backends/` package (base + claude + local)
-> 4. Refactor `core/brain.py` into a thin dispatcher
-> 5. Update `core/assistant.py` (pre-router switch check)
-> 6. Update `requirements.txt`
-> 7. Update boot sequence in `main.py`
+> **Status:** Implemented — see `core/backends/`, `core/brain.py`, `core/assistant.py`
+> **Default local model:** `qwen2.5:7b-instruct` (pulled via `ollama pull qwen2.5:7b-instruct`)
 
 ---
 
@@ -605,22 +597,22 @@ logger.info(
 
 ## ✅ ACCEPTANCE CRITERIA
 
-- [ ] Saying/typing "switch to local" while Claude is active → Claudia confirms
+- [x] Saying/typing "switch to local" while Claude is active → Claudia confirms
       and the next response comes from Ollama
-- [ ] Saying/typing "switch to claude" while local is active → confirms and
+- [x] Saying/typing "switch to claude" while local is active → confirms and
       switches back
-- [ ] Switching mid-conversation preserves session memory — Claudia remembers
+- [x] Switching mid-conversation preserves session memory — Claudia remembers
       what was said before the switch, regardless of which backend answers next
-- [ ] If Ollama isn't running and user says "switch to local" → Claudia reports
+- [x] If Ollama isn't running and user says "switch to local" → Claudia reports
       it's unreachable and stays on the current provider (no crash, no silent
       failure)
-- [ ] If `ANTHROPIC_API_KEY` is missing and user says "switch to claude" →
+- [x] If `ANTHROPIC_API_KEY` is missing and user says "switch to claude" →
       same graceful refusal
-- [ ] Research context injection (`internet_research.md`) works identically
+- [x] Research context injection (`internet_research.md`) works identically
       on both backends, with local applying tighter truncation
-- [ ] Boot log clearly states which provider is active and whether both are
+- [x] Boot log clearly states which provider is active and whether both are
       reachable
-- [ ] No restart required to switch — the change is in-memory on the running
+- [x] No restart required to switch — the change is in-memory on the running
       `Brain` instance
 
 ---

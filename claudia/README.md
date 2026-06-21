@@ -46,6 +46,37 @@ The web dashboard is available at **http://localhost:5000**.
 | `OPENWEATHERMAP_API_KEY` | No | Weather skill |
 | `NEWSAPI_KEY` | No | News briefing skill |
 | `ELEVENLABS_API_KEY` | No | Premium voice (optional) |
+| `BRAVE_API_KEY` | No | Brave Search (better research results) |
+
+---
+
+## Local Backend (Ollama)
+
+CLAUDIA supports switching to a fully offline local LLM at runtime — no API key, no internet.
+
+### Setup
+
+1. Install Ollama: https://ollama.com/download
+2. Pull the default model:
+   ```
+   ollama pull qwen2.5:7b-instruct
+   ```
+3. Ollama runs as a background service automatically after install.
+
+### Switching backends
+
+While CLAUDIA is running, say or type:
+
+- **"switch to local"** — routes all responses through the local Ollama model
+- **"switch to claude"** — switches back to the Claude API
+
+The switch is instant, in-session, and preserves conversation memory. The active backend is shown in the boot log.
+
+To change the startup default, edit `config.yaml`:
+```yaml
+brain:
+  active_provider: "claude"   # or "local"
+```
 
 ---
 
@@ -99,11 +130,15 @@ claudia/
 ├── .env                 # Your secrets (never commit this)
 ├── core/
 │   ├── assistant.py     # Main orchestrator
-│   ├── brain.py         # LLM interface
+│   ├── brain.py         # LLM dispatcher (provider-agnostic)
 │   ├── listener.py      # Voice input
-│   ├── speaker.py       # TTS output
+│   ├── speaker.py       # TTS output (ElevenLabs + pyttsx3 fallback)
 │   ├── intent_router.py # Command routing
-│   └── memory.py        # Session + long-term memory
+│   ├── memory.py        # Session + long-term memory
+│   └── backends/
+│       ├── base.py          # BrainBackend abstract interface
+│       ├── claude_backend.py # Anthropic Claude API + OpenAI fallback
+│       └── local_backend.py  # Ollama local inference
 ├── skills/              # Drop new skills here
 ├── ui/                  # Flask dashboard
 └── tests/
